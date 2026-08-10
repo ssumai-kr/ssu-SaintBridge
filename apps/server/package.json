@@ -1,0 +1,17 @@
+{
+  "name": "@ssu-saintbridge/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"import('node:fs').then(({rmSync}) => rmSync('dist', { recursive: true, force: true }))\"",
+    "lint": "eslint src test --max-warnings 0",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@ssu-saintbridge/protocol": "workspace:*",
+    "@ssu-saintbridge/types": "workspace:*"
+  }
+}
