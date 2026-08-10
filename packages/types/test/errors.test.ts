@@ -11,11 +11,9 @@ describe("SaintError", () => {
   it("assigns retryability from the error code", () => {
     const retryable = new SaintError({
       code: "UPSTREAM_UNAVAILABLE",
-      message: "u-SAINT is unavailable.",
     });
     const terminal = new SaintError({
       code: "INVALID_CREDENTIALS",
-      message: "The credentials are invalid.",
     });
 
     expect(retryable.retryable).toBe(true);
@@ -26,26 +24,26 @@ describe("SaintError", () => {
   it("serializes only the safe public payload", () => {
     const error = new SaintError({
       code: "SSO_FLOW_CHANGED",
-      message: "The SSO response did not match the expected contract.",
       cause: new Error("canary-password=do-not-leak"),
     });
 
     expect(JSON.parse(JSON.stringify(error))).toEqual({
       code: "SSO_FLOW_CHANGED",
-      message: "The SSO response did not match the expected contract.",
+      message: "The upstream SSO flow no longer matches the expected contract.",
       retryable: false,
     });
     expect(JSON.stringify(error)).not.toContain("canary-password");
   });
 
-  it("rejects an empty public message", () => {
-    expect(
-      () =>
-        new SaintError({
-          code: "PARSER_MISMATCH",
-          message: "   ",
-        }),
-    ).toThrow();
+  it("uses a controlled message instead of an upstream cause", () => {
+    const canary = "UPSTREAM_HTML_CANARY";
+    const error = new SaintError({
+      code: "PARSER_MISMATCH",
+      cause: new Error(canary),
+    });
+
+    expect(error.message).toBe("The upstream document no longer matches the expected contract.");
+    expect(JSON.stringify(error)).not.toContain(canary);
   });
 });
 

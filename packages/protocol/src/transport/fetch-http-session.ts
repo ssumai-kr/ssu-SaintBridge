@@ -9,6 +9,7 @@ import {
 import {
   createHttpRequestId,
   emitHttpDiagnostic,
+  toHttpStatusCategory,
   type HttpDiagnosticFailure,
   type HttpDiagnosticSink,
 } from "./http-diagnostics.js";
@@ -48,8 +49,6 @@ interface ActiveRequest {
 
 interface RequestDiagnosticContext {
   attempt: number;
-  readonly host: string;
-  readonly method: HttpSessionRequest["method"];
   readonly requestId: string;
 }
 
@@ -280,14 +279,10 @@ export class FetchHttpSession implements HttpSession {
     const url = this.#urlPolicy.assertAllowed(request.url);
     const diagnosticContext: RequestDiagnosticContext = {
       attempt: 0,
-      host: url.hostname,
-      method: request.method,
       requestId: createHttpRequestId(),
     };
     emitHttpDiagnostic(this.#diagnosticSink, {
       event: "request_started",
-      host: diagnosticContext.host,
-      method: diagnosticContext.method,
       requestId: diagnosticContext.requestId,
     });
     const activeRequest: ActiveRequest = {
@@ -340,10 +335,8 @@ export class FetchHttpSession implements HttpSession {
       emitHttpDiagnostic(this.#diagnosticSink, {
         attempt: diagnosticContext.attempt,
         event: "request_completed",
-        host: diagnosticContext.host,
-        method: diagnosticContext.method,
         requestId: diagnosticContext.requestId,
-        status: response.status,
+        statusCategory: toHttpStatusCategory(response.status),
       });
 
       return {
@@ -369,8 +362,6 @@ export class FetchHttpSession implements HttpSession {
         ...(diagnosticContext.attempt === 0 ? {} : { attempt: diagnosticContext.attempt }),
         event: "request_failed",
         failure: diagnosticFailure(mappedError),
-        host: diagnosticContext.host,
-        method: diagnosticContext.method,
         requestId: diagnosticContext.requestId,
       });
       throw mappedError;
@@ -411,8 +402,6 @@ export class FetchHttpSession implements HttpSession {
         emitHttpDiagnostic(this.#diagnosticSink, {
           attempt: diagnosticContext.attempt + 1,
           event: "retry_scheduled",
-          host: diagnosticContext.host,
-          method: diagnosticContext.method,
           requestId: diagnosticContext.requestId,
           retryReason: "network_failure",
         });
@@ -429,11 +418,9 @@ export class FetchHttpSession implements HttpSession {
       emitHttpDiagnostic(this.#diagnosticSink, {
         attempt: diagnosticContext.attempt + 1,
         event: "retry_scheduled",
-        host: diagnosticContext.host,
-        method: diagnosticContext.method,
         requestId: diagnosticContext.requestId,
         retryReason: "upstream_status",
-        status: response.status,
+        statusCategory: toHttpStatusCategory(response.status),
       });
       await this.#waitBeforeRetry(retriesUsed, signal);
       retriesUsed += 1;

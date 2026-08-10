@@ -27,6 +27,18 @@ export const saintErrorRetryability = {
   RATE_LIMITED: true,
 } as const satisfies Readonly<Record<SaintErrorCode, boolean>>;
 
+export const saintErrorMessages = {
+  INVALID_CREDENTIALS: "The provided credentials were rejected.",
+  SECOND_FACTOR_REQUIRED: "An interactive second factor is required.",
+  ACCOUNT_LOCKED: "The account is locked.",
+  SSO_FLOW_CHANGED: "The upstream SSO flow no longer matches the expected contract.",
+  PORTAL_SESSION_EXPIRED: "The upstream portal session has expired.",
+  APPLICATION_CONTEXT_EXPIRED: "The upstream application context has expired.",
+  UPSTREAM_UNAVAILABLE: "The upstream service is unavailable.",
+  PARSER_MISMATCH: "The upstream document no longer matches the expected contract.",
+  RATE_LIMITED: "The upstream service rate limit was reached.",
+} as const satisfies Readonly<Record<SaintErrorCode, string>>;
+
 export const saintErrorPayloadSchema = z
   .object({
     code: saintErrorCodeSchema,
@@ -39,7 +51,6 @@ export type SaintErrorPayload = z.infer<typeof saintErrorPayloadSchema>;
 
 export interface SaintErrorOptions {
   readonly code: SaintErrorCode;
-  readonly message: string;
   readonly cause?: unknown;
 }
 
@@ -50,7 +61,7 @@ export class SaintError extends Error {
   constructor(options: SaintErrorOptions) {
     const payload = saintErrorPayloadSchema.parse({
       code: options.code,
-      message: options.message,
+      message: saintErrorMessages[options.code],
       retryable: saintErrorRetryability[options.code],
     });
 

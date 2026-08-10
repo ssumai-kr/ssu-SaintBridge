@@ -35,10 +35,10 @@ export class HttpTextDecodingError extends Error {
 
 /** Decoded document whose JSON representation intentionally excludes the source text. */
 export class DecodedHttpDocument {
+  readonly #text: string;
   readonly charset: string;
   readonly kind: HttpTextDocumentKind;
   readonly mediaType: string;
-  readonly text: string;
 
   constructor(options: {
     readonly charset: string;
@@ -49,7 +49,11 @@ export class DecodedHttpDocument {
     this.charset = options.charset;
     this.kind = options.kind;
     this.mediaType = options.mediaType;
-    this.text = options.text;
+    this.#text = options.text;
+  }
+
+  get text(): string {
+    return this.#text;
   }
 
   toJSON(): {

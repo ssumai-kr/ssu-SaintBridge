@@ -7,6 +7,7 @@ export type {
   HttpDiagnosticFailure,
   HttpDiagnosticRetryReason,
   HttpDiagnosticSink,
+  HttpDiagnosticStatusCategory,
 } from "./transport/http-diagnostics.js";
 export * from "./transport/http-session.js";
 export * from "./transport/http-text-decoder.js";

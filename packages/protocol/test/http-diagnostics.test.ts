@@ -44,7 +44,7 @@ describe("FetchHttpSession diagnostics", () => {
       attempt: 2,
       retryReason: "network_failure",
     });
-    expect(events[2]).toMatchObject({ attempt: 2, status: 200 });
+    expect(events[2]).toMatchObject({ attempt: 2, statusCategory: "2xx" });
     expect(new Set(events.map((event) => event.requestId)).size).toBe(1);
     expect(events[0]?.requestId).toMatch(
       /^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
@@ -64,7 +64,9 @@ describe("FetchHttpSession diagnostics", () => {
     ]) {
       expect(serialized).not.toContain(canary);
     }
-    expect(serialized).toContain('"host":"saint.ssu.ac.kr"');
+    expect(serialized).not.toContain("saint.ssu.ac.kr");
+    expect(serialized).not.toContain('"method"');
+    expect(serialized).not.toContain('"status":200');
   });
 
   it("reports a POST failure without scheduling a replay", async () => {
@@ -94,7 +96,6 @@ describe("FetchHttpSession diagnostics", () => {
     expect(events[1]).toMatchObject({
       attempt: 1,
       failure: "NETWORK_FAILURE",
-      method: "POST",
     });
     expect(JSON.stringify(events)).not.toContain("FORM_BODY_CANARY");
     expect(JSON.stringify(events)).not.toContain("DO_NOT_LOG");
@@ -131,7 +132,7 @@ describe("FetchHttpSession diagnostics", () => {
       attempt: 2,
       event: "retry_scheduled",
       retryReason: "upstream_status",
-      status: 503,
+      statusCategory: "5xx",
     });
     expect(JSON.stringify(events)).not.toContain("GATEWAY_BODY_CANARY");
     expect(JSON.stringify(events)).not.toContain("COOKIE_CANARY");

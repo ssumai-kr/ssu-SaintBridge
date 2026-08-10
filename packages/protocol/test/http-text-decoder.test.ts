@@ -53,6 +53,10 @@ describe("decodeHttpTextResponse", () => {
     expect(JSON.stringify(document)).toBe(
       '{"charset":"utf-8","kind":"html","mediaType":"text/html"}',
     );
+    expect(JSON.stringify({ ...document })).toBe(
+      '{"charset":"utf-8","kind":"html","mediaType":"text/html"}',
+    );
+    expect(Object.keys(document)).not.toContain("text");
   });
 
   it("detects EUC-KR from an HTML meta element", () => {
