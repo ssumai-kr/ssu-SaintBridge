@@ -15,8 +15,6 @@ pnpm install --frozen-lockfile
 pnpm verify
 ```
 
-구현 범위와 순서는 [PROJECT_PLAN.md](./PROJECT_PLAN.md)와 [ROADMAP.md](./ROADMAP.md)를 참고하세요.
-
 ## 안전 원칙
 
 - 본인 계정과 본인 데이터만 사용합니다.
@@ -24,4 +22,4 @@ pnpm verify
 - 초기 버전은 읽기 전용이며 2차 인증, CAPTCHA, 접근 통제를 우회하지 않습니다.
 - REST server는 local-first로 설계합니다.
 
-This project is not affiliated with or endorsed by Soongsil University or SAP.
+> This project is not affiliated with or endorsed by Soongsil University or SAP.

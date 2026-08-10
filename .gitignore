@@ -28,3 +28,6 @@ id_ed25519
 .DS_Store
 .idea/
 .vscode/
+
+/PROJECT_PLAN.md
+/ROADMAP.md
