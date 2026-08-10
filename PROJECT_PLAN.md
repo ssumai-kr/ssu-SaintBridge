@@ -4,7 +4,7 @@
 > 작성일: 2026-08-09  
 > 최근 수정일: 2026-08-10  
 > 프로젝트명: `ssu-saintbridge`  
-> 상태: Phase 0 착수 준비  
+> 상태: Phase 1 HTTP Transport 진행 중  
 > 실행 로드맵: [ROADMAP.md](./ROADMAP.md)
 
 ## 1. 프로젝트 개요

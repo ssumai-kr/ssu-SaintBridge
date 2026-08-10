@@ -2,7 +2,7 @@
 
 > 기준 문서: [PROJECT_PLAN.md](./PROJECT_PLAN.md)  
 > 작성일: 2026-08-10  
-> 현재 단계: `M0 — Foundation` 진행 중  
+> 현재 단계: `M1 — HTTP Transport` 진행 중  
 > 대상 릴리스: `v0.1.0`
 
 ## 1. 로드맵 운영 방식
@@ -28,16 +28,16 @@
 
 1인 전일제 개발, 주 5일, 총 20일을 기준으로 한다. 4주 안에 `0.1.0-rc.1`을 만들고, 보안 출시 게이트가 모두 통과되면 같은 주에 `0.1.0`을 배포한다. 일정이 밀리면 기능 범위를 줄이고 보안·세션 격리·민감정보 검사는 줄이지 않는다.
 
-| 마일스톤 | 목표                          |          배정 | 선행 조건            | 상태    |
-| -------- | ----------------------------- | ------------: | -------------------- | ------- |
-| M0       | 안전한 모노레포와 개발 기반   |   1주차 D1~D2 | 없음                 | `DOING` |
-| M1       | cookie-aware HTTP transport   |   1주차 D3~D5 | M0                   | `TODO`  |
-| M2       | SSO/포털 인증 상태 머신       |   2주차 D6~D7 | M1                   | `TODO`  |
-| M3       | Web Dynpro 공통 프로토콜      |  2주차 D8~D10 | M2                   | `TODO`  |
-| M4       | 학생 기본정보 application     | 3주차 D11~D12 | M3                   | `TODO`  |
-| M5       | 수강내역·시간표 application   | 3주차 D13~D15 | M3, M4의 parser 패턴 | `TODO`  |
-| M6       | CLI와 local-first REST Server | 4주차 D16~D18 | M4, M5               | `TODO`  |
-| M7       | RC 검증과 v0.1.0 배포         | 4주차 D19~D20 | M0~M6                | `TODO`  |
+| 마일스톤 | 목표                          |          배정 | 선행 조건            | 상태      |
+| -------- | ----------------------------- | ------------: | -------------------- | --------- |
+| M0       | 안전한 모노레포와 개발 기반   |   1주차 D1~D2 | 없음                 | `BLOCKED` |
+| M1       | cookie-aware HTTP transport   |   1주차 D3~D5 | M0                   | `DOING`   |
+| M2       | SSO/포털 인증 상태 머신       |   2주차 D6~D7 | M1                   | `TODO`    |
+| M3       | Web Dynpro 공통 프로토콜      |  2주차 D8~D10 | M2                   | `TODO`    |
+| M4       | 학생 기본정보 application     | 3주차 D11~D12 | M3                   | `TODO`    |
+| M5       | 수강내역·시간표 application   | 3주차 D13~D15 | M3, M4의 parser 패턴 | `TODO`    |
+| M6       | CLI와 local-first REST Server | 4주차 D16~D18 | M4, M5               | `TODO`    |
+| M7       | RC 검증과 v0.1.0 배포         | 4주차 D19~D20 | M0~M6                | `TODO`    |
 
 현재 진행 상황:
 
@@ -48,7 +48,8 @@
 - `DONE`: FND-05 fixture loader, loopback mock upstream, 테스트 네트워크 차단
 - `DONE`: FND-06 민감 파일·fixture·canary repository 검사
 - `DONE`: FND-07 header/query/form/JSON 기반 HAR sanitizer
-- `DOING`: FND-08 CI workflow의 최초 원격 실행 확인
+- `BLOCKED`: FND-08 CI workflow의 최초 원격 실행 확인—첫 push 필요
+- `DONE`: NET-01 HTTPS·host·port·credential·fragment URL 정책
 
 ### 주차별 결과물
 
