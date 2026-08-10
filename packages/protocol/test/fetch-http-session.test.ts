@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   FetchHttpSession,
   HttpSessionError,
+  maximumMaxRetries,
   maximumMaxResponseBytes,
   maximumRequestTimeoutMs,
+  maximumRetryBaseDelayMs,
   requestFollowingRedirects,
   type FetchImplementation,
 } from "../src/index.js";
@@ -122,6 +124,137 @@ describe("FetchHttpSession", () => {
     expect(() => new FetchHttpSession({ maxResponseBytes: maximumMaxResponseBytes + 1 })).toThrow(
       TypeError,
     );
+    expect(() => new FetchHttpSession({ maxRetries: -1 })).toThrow(TypeError);
+    expect(() => new FetchHttpSession({ maxRetries: maximumMaxRetries + 1 })).toThrow(TypeError);
+    expect(() => new FetchHttpSession({ retryBaseDelayMs: 1.5 })).toThrow(TypeError);
+    expect(() => new FetchHttpSession({ retryBaseDelayMs: maximumRetryBaseDelayMs + 1 })).toThrow(
+      TypeError,
+    );
+  });
+
+  it.each(["GET", "HEAD"] as const)(
+    "retries a transient network failure for safe %s requests",
+    async (method) => {
+      let calls = 0;
+      const fetch: FetchImplementation = async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("temporary connection reset");
+        return responseWithHeaders(method === "HEAD" ? null : "ok", { status: 200 });
+      };
+      const session = new FetchHttpSession({
+        fetchImplementation: fetch,
+        retryBaseDelayMs: 0,
+      });
+
+      const response = await session.request({
+        method,
+        url: new URL("https://saint.ssu.ac.kr/data"),
+      });
+
+      expect(response.status).toBe(200);
+      expect(calls).toBe(2);
+    },
+  );
+
+  it("retries a transient gateway response without accepting its cookies", async () => {
+    const fake = createQueueFetch([
+      responseWithHeaders(new ReadableStream<Uint8Array>(), { status: 503 }, [
+        "REJECTED_ATTEMPT=secret; Path=/; Secure; HttpOnly",
+      ]),
+      responseWithHeaders("ok", { status: 200 }),
+    ]);
+    const session = new FetchHttpSession({
+      fetchImplementation: fake.fetch,
+      retryBaseDelayMs: 0,
+    });
+
+    const response = await session.request({
+      method: "GET",
+      url: new URL("https://saint.ssu.ac.kr/data"),
+    });
+
+    expect(response.status).toBe(200);
+    expect(fake.calls).toHaveLength(2);
+    expect(new Headers(fake.calls[1]?.init?.headers).get("cookie")).toBeNull();
+  });
+
+  it("does not retry a login POST after a network failure", async () => {
+    let calls = 0;
+    const fetch: FetchImplementation = async () => {
+      calls += 1;
+      throw new Error("login result is unknown");
+    };
+    const session = new FetchHttpSession({
+      fetchImplementation: fetch,
+      retryBaseDelayMs: 0,
+    });
+
+    await expect(
+      session.request({
+        method: "POST",
+        url: new URL("https://saint.ssu.ac.kr/login"),
+        body: "credential=mock",
+      }),
+    ).rejects.toMatchObject({ violation: "NETWORK_FAILURE" });
+    expect(calls).toBe(1);
+  });
+
+  it("stops after the configured retry count", async () => {
+    let calls = 0;
+    const fetch: FetchImplementation = async () => {
+      calls += 1;
+      throw new Error("still unavailable");
+    };
+    const session = new FetchHttpSession({
+      fetchImplementation: fetch,
+      maxRetries: 2,
+      retryBaseDelayMs: 0,
+    });
+
+    await expect(
+      session.request({
+        method: "GET",
+        url: new URL("https://saint.ssu.ac.kr/data"),
+      }),
+    ).rejects.toMatchObject({ violation: "NETWORK_FAILURE" });
+    expect(calls).toBe(3);
+  });
+
+  it("does not start another retry after the request timeout expires", async () => {
+    let calls = 0;
+    const fetch: FetchImplementation = async () => {
+      calls += 1;
+      throw new Error("temporary failure");
+    };
+    const session = new FetchHttpSession({
+      fetchImplementation: fetch,
+      requestTimeoutMs: 20,
+      retryBaseDelayMs: 100,
+    });
+
+    await expect(
+      session.request({
+        method: "GET",
+        url: new URL("https://saint.ssu.ac.kr/data"),
+      }),
+    ).rejects.toMatchObject({ violation: "REQUEST_TIMEOUT" });
+    expect(calls).toBe(1);
+  });
+
+  it("returns non-retryable HTTP failures without replaying the request", async () => {
+    const fake = createQueueFetch([responseWithHeaders("failure", { status: 500 })]);
+    const session = new FetchHttpSession({
+      fetchImplementation: fake.fetch,
+      retryBaseDelayMs: 0,
+    });
+
+    const response = await session.request({
+      method: "GET",
+      url: new URL("https://saint.ssu.ac.kr/data"),
+    });
+
+    expect(response.status).toBe(500);
+    expect(fake.calls).toHaveLength(1);
   });
 
   it("times out a fetch that does not settle", async () => {
@@ -289,7 +422,7 @@ describe("FetchHttpSession", () => {
     const fetch: FetchImplementation = async () => {
       throw new Error("https://saint.ssu.ac.kr/?token=do-not-leak");
     };
-    const session = new FetchHttpSession({ fetchImplementation: fetch });
+    const session = new FetchHttpSession({ fetchImplementation: fetch, maxRetries: 0 });
 
     let captured: unknown;
     try {

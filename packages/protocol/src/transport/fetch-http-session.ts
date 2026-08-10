@@ -17,7 +17,9 @@ export type FetchImplementation = (
 export interface FetchHttpSessionOptions {
   readonly fetchImplementation?: FetchImplementation;
   readonly maxResponseBytes?: number;
+  readonly maxRetries?: number;
   readonly requestTimeoutMs?: number;
+  readonly retryBaseDelayMs?: number;
   readonly urlPolicy?: UpstreamUrlPolicy;
 }
 
@@ -25,6 +27,10 @@ export const defaultRequestTimeoutMs = 30_000;
 export const maximumRequestTimeoutMs = 120_000;
 export const defaultMaxResponseBytes = 5 * 1024 * 1024;
 export const maximumMaxResponseBytes = 20 * 1024 * 1024;
+export const defaultMaxRetries = 1;
+export const maximumMaxRetries = 2;
+export const defaultRetryBaseDelayMs = 100;
+export const maximumRetryBaseDelayMs = 1_000;
 
 type AbortSource = "caller" | "closed" | "timeout";
 
@@ -44,6 +50,8 @@ const forbiddenRequestHeaders = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
+const retryableMethods = new Set<HttpSessionRequest["method"]>(["GET", "HEAD"]);
+const retryableStatuses = new Set([502, 503, 504]);
 
 const createRequestHeaders = (
   request: HttpSessionRequest,
@@ -77,6 +85,13 @@ const collectResponseHeaders = (headers: Headers): HttpResponseHeaders => {
 const assertIntegerLimit = (name: string, value: number, maximum: number): number => {
   if (!Number.isInteger(value) || value <= 0 || value > maximum) {
     throw new TypeError(`${name} must be a positive integer no greater than ${maximum}.`);
+  }
+  return value;
+};
+
+const assertNonNegativeIntegerLimit = (name: string, value: number, maximum: number): number => {
+  if (!Number.isInteger(value) || value < 0 || value > maximum) {
+    throw new TypeError(`${name} must be a non-negative integer no greater than ${maximum}.`);
   }
   return value;
 };
@@ -118,6 +133,21 @@ const runUntilAborted = async <Result>(
     return await Promise.race([operation, aborted.promise]);
   } finally {
     aborted.dispose();
+  }
+};
+
+const waitForRetryDelay = async (delayMs: number, signal: AbortSignal): Promise<void> => {
+  const aborted = createAbortWaiter(signal);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const elapsed = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, delayMs);
+  });
+
+  try {
+    await Promise.race([elapsed, aborted.promise]);
+  } finally {
+    aborted.dispose();
+    if (timer !== undefined) clearTimeout(timer);
   }
 };
 
@@ -187,7 +217,9 @@ export class FetchHttpSession implements HttpSession {
   readonly #cookieJar: SessionCookieJar;
   readonly #fetch: FetchImplementation;
   readonly #maxResponseBytes: number;
+  readonly #maxRetries: number;
   readonly #requestTimeoutMs: number;
+  readonly #retryBaseDelayMs: number;
   readonly #urlPolicy: UpstreamUrlPolicy;
   #closed = false;
 
@@ -203,6 +235,16 @@ export class FetchHttpSession implements HttpSession {
       "maxResponseBytes",
       options.maxResponseBytes ?? defaultMaxResponseBytes,
       maximumMaxResponseBytes,
+    );
+    this.#maxRetries = assertNonNegativeIntegerLimit(
+      "maxRetries",
+      options.maxRetries ?? defaultMaxRetries,
+      maximumMaxRetries,
+    );
+    this.#retryBaseDelayMs = assertNonNegativeIntegerLimit(
+      "retryBaseDelayMs",
+      options.retryBaseDelayMs ?? defaultRetryBaseDelayMs,
+      maximumRetryBaseDelayMs,
     );
     this.#cookieJar = new SessionCookieJar({ urlPolicy: this.#urlPolicy });
   }
@@ -237,8 +279,9 @@ export class FetchHttpSession implements HttpSession {
       const headers = createRequestHeaders(request, cookieHeader);
       const body = createRequestBody(request.body);
 
-      const response = await runUntilAborted(
-        this.#fetch(url, {
+      const response = await this.#fetchWithRetry(
+        url,
+        {
           method: request.method,
           headers,
           redirect: "manual",
@@ -246,7 +289,8 @@ export class FetchHttpSession implements HttpSession {
           cache: "no-store",
           signal: activeRequest.controller.signal,
           ...(body === undefined ? {} : { body }),
-        }),
+        },
+        request.method,
         activeRequest.controller.signal,
       );
       await this.#cookieJar.storeFromResponse(url, response.headers.getSetCookie());
@@ -296,5 +340,47 @@ export class FetchHttpSession implements HttpSession {
 
   toJSON(): { readonly closed: boolean } {
     return { closed: this.#closed };
+  }
+
+  async #fetchWithRetry(
+    url: URL,
+    init: RequestInit,
+    method: HttpSessionRequest["method"],
+    signal: AbortSignal,
+  ): Promise<Response> {
+    let retriesUsed = 0;
+
+    while (true) {
+      let response: Response;
+      try {
+        response = await runUntilAborted(this.#fetch(url, init), signal);
+      } catch (error: unknown) {
+        if (!this.#canRetry(method, retriesUsed, signal)) throw error;
+        await this.#waitBeforeRetry(retriesUsed, signal);
+        retriesUsed += 1;
+        continue;
+      }
+
+      if (!retryableStatuses.has(response.status) || !this.#canRetry(method, retriesUsed, signal)) {
+        return response;
+      }
+
+      cancelResponseBody(response);
+      await this.#waitBeforeRetry(retriesUsed, signal);
+      retriesUsed += 1;
+    }
+  }
+
+  #canRetry(
+    method: HttpSessionRequest["method"],
+    retriesUsed: number,
+    signal: AbortSignal,
+  ): boolean {
+    return retryableMethods.has(method) && retriesUsed < this.#maxRetries && !signal.aborted;
+  }
+
+  async #waitBeforeRetry(retriesUsed: number, signal: AbortSignal): Promise<void> {
+    const delayMs = this.#retryBaseDelayMs * 2 ** retriesUsed;
+    await waitForRetryDelay(delayMs, signal);
   }
 }
