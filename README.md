@@ -23,3 +23,5 @@ pnpm verify
 - 실제 비밀번호, 쿠키, SSO 토큰, 원본 HAR를 저장소에 커밋하지 않습니다.
 - 초기 버전은 읽기 전용이며 2차 인증, CAPTCHA, 접근 통제를 우회하지 않습니다.
 - REST server는 local-first로 설계합니다.
+
+This project is not affiliated with or endorsed by Soongsil University or SAP.
