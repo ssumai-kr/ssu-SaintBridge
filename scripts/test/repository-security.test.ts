@@ -26,6 +26,11 @@ describe("repository security scanner", () => {
     await mkdir(join(root, "fixtures", "mock"), { recursive: true });
     await writeFile(join(root, "index.ts"), "export const ok = true;\n", "utf8");
     await writeFile(
+      join(root, "package.json"),
+      JSON.stringify({ dependencies: { "tough-cookie": "6.0.2" } }),
+      "utf8",
+    );
+    await writeFile(
       join(root, "fixtures", "mock", "login.sanitized.har"),
       JSON.stringify({ log: { entries: [] } }),
       "utf8",

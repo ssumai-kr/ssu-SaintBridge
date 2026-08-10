@@ -20,6 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@ssu-saintbridge/types": "workspace:*"
+    "@ssu-saintbridge/types": "workspace:*",
+    "tough-cookie": "6.0.2"
   }
 }

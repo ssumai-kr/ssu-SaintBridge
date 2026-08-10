@@ -37,15 +37,15 @@ const globalContentRules = [
 const artifactContentRules = [
   {
     rule: "COOKIE_VALUE_PRESENT",
-    pattern: /["']?(?:cookie|set-cookie)["']?\s*[:=]\s*["']?(?!\[REDACTED)[^\s"']+/i,
+    pattern: /(?:^|[{\s,])["']?(?:cookie|set-cookie)["']?\s*[:=]\s*["']?(?!\[REDACTED)[^\s"']+/i,
   },
   {
     rule: "AUTHORIZATION_VALUE_PRESENT",
-    pattern: /["']?authorization["']?\s*[:=]\s*["']?(?:basic|bearer)\s+[^\s"']+/i,
+    pattern: /(?:^|[{\s,])["']?authorization["']?\s*[:=]\s*["']?(?:basic|bearer)\s+[^\s"']+/i,
   },
   {
     rule: "PASSWORD_VALUE_PRESENT",
-    pattern: /["']?(?:password|passwd|pwd)["']?\s*[:=]\s*["']?(?!\[REDACTED)[^\s"']+/i,
+    pattern: /(?:^|[{\s,])["']?(?:password|passwd|pwd)["']?\s*[:=]\s*["']?(?!\[REDACTED)[^\s"']+/i,
   },
   {
     rule: "PERSONAL_ID_PRESENT",
