@@ -6,6 +6,12 @@ import {
   type HttpSessionRequest,
   type HttpSessionResponse,
 } from "./http-session.js";
+import {
+  createHttpRequestId,
+  emitHttpDiagnostic,
+  type HttpDiagnosticFailure,
+  type HttpDiagnosticSink,
+} from "./http-diagnostics.js";
 import { SessionCookieJar, SessionCookieJarError } from "./session-cookie-jar.js";
 import { createOfficialUpstreamUrlPolicy, type UpstreamUrlPolicy } from "./upstream-url-policy.js";
 
@@ -15,6 +21,7 @@ export type FetchImplementation = (
 ) => Promise<Response>;
 
 export interface FetchHttpSessionOptions {
+  readonly diagnosticSink?: HttpDiagnosticSink;
   readonly fetchImplementation?: FetchImplementation;
   readonly maxResponseBytes?: number;
   readonly maxRetries?: number;
@@ -37,6 +44,13 @@ type AbortSource = "caller" | "closed" | "timeout";
 interface ActiveRequest {
   readonly controller: AbortController;
   abortSource: AbortSource | null;
+}
+
+interface RequestDiagnosticContext {
+  attempt: number;
+  readonly host: string;
+  readonly method: HttpSessionRequest["method"];
+  readonly requestId: string;
 }
 
 const forbiddenRequestHeaders = new Set([
@@ -103,6 +117,11 @@ const abortActiveRequest = (request: ActiveRequest, source: AbortSource): void =
 };
 
 const isAborted = (signal: AbortSignal | undefined): boolean => signal?.aborted === true;
+
+const diagnosticFailure = (
+  error: HttpSessionError | SessionCookieJarError,
+): HttpDiagnosticFailure =>
+  error instanceof SessionCookieJarError ? `COOKIE_${error.violation}` : error.violation;
 
 interface AbortWaiter {
   readonly dispose: () => void;
@@ -215,6 +234,7 @@ const readResponseBody = async (
 export class FetchHttpSession implements HttpSession {
   readonly #activeRequests = new Set<ActiveRequest>();
   readonly #cookieJar: SessionCookieJar;
+  readonly #diagnosticSink: HttpDiagnosticSink | undefined;
   readonly #fetch: FetchImplementation;
   readonly #maxResponseBytes: number;
   readonly #maxRetries: number;
@@ -226,6 +246,7 @@ export class FetchHttpSession implements HttpSession {
   constructor(options: FetchHttpSessionOptions = {}) {
     this.#urlPolicy = options.urlPolicy ?? createOfficialUpstreamUrlPolicy();
     this.#fetch = options.fetchImplementation ?? globalThis.fetch.bind(globalThis);
+    this.#diagnosticSink = options.diagnosticSink;
     this.#requestTimeoutMs = assertIntegerLimit(
       "requestTimeoutMs",
       options.requestTimeoutMs ?? defaultRequestTimeoutMs,
@@ -257,6 +278,18 @@ export class FetchHttpSession implements HttpSession {
     if (isAborted(request.signal)) throw new HttpSessionError("REQUEST_ABORTED");
 
     const url = this.#urlPolicy.assertAllowed(request.url);
+    const diagnosticContext: RequestDiagnosticContext = {
+      attempt: 0,
+      host: url.hostname,
+      method: request.method,
+      requestId: createHttpRequestId(),
+    };
+    emitHttpDiagnostic(this.#diagnosticSink, {
+      event: "request_started",
+      host: diagnosticContext.host,
+      method: diagnosticContext.method,
+      requestId: diagnosticContext.requestId,
+    });
     const activeRequest: ActiveRequest = {
       controller: new AbortController(),
       abortSource: null,
@@ -292,6 +325,7 @@ export class FetchHttpSession implements HttpSession {
         },
         request.method,
         activeRequest.controller.signal,
+        diagnosticContext,
       );
       await this.#cookieJar.storeFromResponse(url, response.headers.getSetCookie());
       if (activeRequest.controller.signal.aborted) {
@@ -303,6 +337,14 @@ export class FetchHttpSession implements HttpSession {
         this.#maxResponseBytes,
         activeRequest.controller.signal,
       );
+      emitHttpDiagnostic(this.#diagnosticSink, {
+        attempt: diagnosticContext.attempt,
+        event: "request_completed",
+        host: diagnosticContext.host,
+        method: diagnosticContext.method,
+        requestId: diagnosticContext.requestId,
+        status: response.status,
+      });
 
       return {
         status: response.status,
@@ -311,19 +353,27 @@ export class FetchHttpSession implements HttpSession {
         body: bodyBytes,
       };
     } catch (error: unknown) {
+      let mappedError: HttpSessionError | SessionCookieJarError;
       if (this.#closed || activeRequest.abortSource === "closed") {
-        throw new HttpSessionError("CLOSED");
+        mappedError = new HttpSessionError("CLOSED");
+      } else if (activeRequest.abortSource === "timeout") {
+        mappedError = new HttpSessionError("REQUEST_TIMEOUT");
+      } else if (activeRequest.abortSource === "caller") {
+        mappedError = new HttpSessionError("REQUEST_ABORTED");
+      } else if (error instanceof HttpSessionError || error instanceof SessionCookieJarError) {
+        mappedError = error;
+      } else {
+        mappedError = new HttpSessionError("NETWORK_FAILURE");
       }
-      if (activeRequest.abortSource === "timeout") {
-        throw new HttpSessionError("REQUEST_TIMEOUT");
-      }
-      if (activeRequest.abortSource === "caller") {
-        throw new HttpSessionError("REQUEST_ABORTED");
-      }
-      if (error instanceof HttpSessionError || error instanceof SessionCookieJarError) {
-        throw error;
-      }
-      throw new HttpSessionError("NETWORK_FAILURE");
+      emitHttpDiagnostic(this.#diagnosticSink, {
+        ...(diagnosticContext.attempt === 0 ? {} : { attempt: diagnosticContext.attempt }),
+        event: "request_failed",
+        failure: diagnosticFailure(mappedError),
+        host: diagnosticContext.host,
+        method: diagnosticContext.method,
+        requestId: diagnosticContext.requestId,
+      });
+      throw mappedError;
     } finally {
       clearTimeout(timeout);
       request.signal?.removeEventListener("abort", abortFromCaller);
@@ -347,15 +397,25 @@ export class FetchHttpSession implements HttpSession {
     init: RequestInit,
     method: HttpSessionRequest["method"],
     signal: AbortSignal,
+    diagnosticContext: RequestDiagnosticContext,
   ): Promise<Response> {
     let retriesUsed = 0;
 
     while (true) {
+      diagnosticContext.attempt += 1;
       let response: Response;
       try {
         response = await runUntilAborted(this.#fetch(url, init), signal);
       } catch (error: unknown) {
         if (!this.#canRetry(method, retriesUsed, signal)) throw error;
+        emitHttpDiagnostic(this.#diagnosticSink, {
+          attempt: diagnosticContext.attempt + 1,
+          event: "retry_scheduled",
+          host: diagnosticContext.host,
+          method: diagnosticContext.method,
+          requestId: diagnosticContext.requestId,
+          retryReason: "network_failure",
+        });
         await this.#waitBeforeRetry(retriesUsed, signal);
         retriesUsed += 1;
         continue;
@@ -366,6 +426,15 @@ export class FetchHttpSession implements HttpSession {
       }
 
       cancelResponseBody(response);
+      emitHttpDiagnostic(this.#diagnosticSink, {
+        attempt: diagnosticContext.attempt + 1,
+        event: "retry_scheduled",
+        host: diagnosticContext.host,
+        method: diagnosticContext.method,
+        requestId: diagnosticContext.requestId,
+        retryReason: "upstream_status",
+        status: response.status,
+      });
       await this.#waitBeforeRetry(retriesUsed, signal);
       retriesUsed += 1;
     }
