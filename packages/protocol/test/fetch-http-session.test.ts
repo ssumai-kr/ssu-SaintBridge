@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   FetchHttpSession,
   HttpSessionError,
+  maximumMaxResponseBytes,
+  maximumRequestTimeoutMs,
   requestFollowingRedirects,
   type FetchImplementation,
 } from "../src/index.js";
@@ -111,6 +113,147 @@ describe("FetchHttpSession", () => {
     expect(new TextDecoder().decode(response.body)).toBe("한글");
   });
 
+  it("rejects invalid timeout and response size options", () => {
+    expect(() => new FetchHttpSession({ requestTimeoutMs: 0 })).toThrow(TypeError);
+    expect(() => new FetchHttpSession({ requestTimeoutMs: maximumRequestTimeoutMs + 1 })).toThrow(
+      TypeError,
+    );
+    expect(() => new FetchHttpSession({ maxResponseBytes: 1.5 })).toThrow(TypeError);
+    expect(() => new FetchHttpSession({ maxResponseBytes: maximumMaxResponseBytes + 1 })).toThrow(
+      TypeError,
+    );
+  });
+
+  it("times out a fetch that does not settle", async () => {
+    const fetch: FetchImplementation = () => new Promise(() => undefined);
+    const session = new FetchHttpSession({
+      fetchImplementation: fetch,
+      requestTimeoutMs: 20,
+    });
+
+    await expect(
+      session.request({
+        method: "GET",
+        url: new URL("https://saint.ssu.ac.kr/slow"),
+      }),
+    ).rejects.toMatchObject({ violation: "REQUEST_TIMEOUT" });
+  });
+
+  it("times out while reading a stalled response body", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      pull: () => new Promise(() => undefined),
+    });
+    const fake = createQueueFetch([responseWithHeaders(stream, { status: 200 })]);
+    const session = new FetchHttpSession({
+      fetchImplementation: fake.fetch,
+      requestTimeoutMs: 20,
+    });
+
+    await expect(
+      session.request({
+        method: "GET",
+        url: new URL("https://saint.ssu.ac.kr/slow-body"),
+      }),
+    ).rejects.toMatchObject({ violation: "REQUEST_TIMEOUT" });
+  });
+
+  it("rejects a caller signal that was already aborted without fetching", async () => {
+    const fake = createQueueFetch([responseWithHeaders("ok", { status: 200 })]);
+    const controller = new AbortController();
+    controller.abort();
+    const session = new FetchHttpSession({ fetchImplementation: fake.fetch });
+
+    await expect(
+      session.request({
+        method: "GET",
+        url: new URL("https://saint.ssu.ac.kr/data"),
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ violation: "REQUEST_ABORTED" });
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  it("distinguishes a caller abort from a timeout", async () => {
+    let markStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const fetch: FetchImplementation = () => {
+      markStarted();
+      return new Promise(() => undefined);
+    };
+    const controller = new AbortController();
+    const session = new FetchHttpSession({ fetchImplementation: fetch });
+
+    const pending = session.request({
+      method: "GET",
+      url: new URL("https://saint.ssu.ac.kr/data"),
+      signal: controller.signal,
+    });
+    await started;
+    controller.abort(new Error("secret abort reason"));
+
+    let captured: unknown;
+    try {
+      await pending;
+    } catch (error: unknown) {
+      captured = error;
+    }
+
+    expect(captured).toMatchObject({ violation: "REQUEST_ABORTED" });
+    expect(JSON.stringify(captured)).not.toContain("secret abort reason");
+  });
+
+  it("rejects an oversized declared Content-Length before reading", async () => {
+    const fake = createQueueFetch([
+      responseWithHeaders("small", {
+        status: 200,
+        headers: { "content-length": "100" },
+      }),
+    ]);
+    const session = new FetchHttpSession({
+      fetchImplementation: fake.fetch,
+      maxResponseBytes: 5,
+    });
+
+    await expect(
+      session.request({
+        method: "GET",
+        url: new URL("https://saint.ssu.ac.kr/data"),
+      }),
+    ).rejects.toMatchObject({ violation: "RESPONSE_TOO_LARGE" });
+  });
+
+  it("stops a streamed body that grows beyond the response limit", async () => {
+    const fake = createQueueFetch([responseWithHeaders("123456", { status: 200 })]);
+    const session = new FetchHttpSession({
+      fetchImplementation: fake.fetch,
+      maxResponseBytes: 5,
+    });
+
+    await expect(
+      session.request({
+        method: "GET",
+        url: new URL("https://saint.ssu.ac.kr/data"),
+      }),
+    ).rejects.toMatchObject({ violation: "RESPONSE_TOO_LARGE" });
+  });
+
+  it("accepts a response body exactly at the configured limit", async () => {
+    const fake = createQueueFetch([responseWithHeaders("12345", { status: 200 })]);
+    const session = new FetchHttpSession({
+      fetchImplementation: fake.fetch,
+      maxResponseBytes: 5,
+    });
+
+    const response = await session.request({
+      method: "GET",
+      url: new URL("https://saint.ssu.ac.kr/data"),
+    });
+
+    expect(new TextDecoder().decode(response.body)).toBe("12345");
+  });
+
   it.each(["Cookie", "Authorization", "Host", "Content-Length"])(
     "rejects the transport-managed request header %s",
     async (header) => {
@@ -177,5 +320,26 @@ describe("FetchHttpSession", () => {
       }),
     ).rejects.toMatchObject({ violation: "CLOSED" });
     expect(JSON.stringify(session)).toBe('{"closed":true}');
+  });
+
+  it("aborts an active request when the session closes", async () => {
+    let markStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const fetch: FetchImplementation = () => {
+      markStarted();
+      return new Promise(() => undefined);
+    };
+    const session = new FetchHttpSession({ fetchImplementation: fetch });
+
+    const pending = session.request({
+      method: "GET",
+      url: new URL("https://saint.ssu.ac.kr/data"),
+    });
+    await started;
+    await session.close();
+
+    await expect(pending).rejects.toMatchObject({ violation: "CLOSED" });
   });
 });

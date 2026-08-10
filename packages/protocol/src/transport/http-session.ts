@@ -11,7 +11,10 @@ export type HttpSessionViolation =
   | "INVALID_REQUEST_BODY"
   | "NETWORK_FAILURE"
   | "MISSING_REDIRECT_LOCATION"
-  | "REDIRECT_LIMIT_EXCEEDED";
+  | "REDIRECT_LIMIT_EXCEEDED"
+  | "REQUEST_ABORTED"
+  | "REQUEST_TIMEOUT"
+  | "RESPONSE_TOO_LARGE";
 
 const violationMessages: Readonly<Record<HttpSessionViolation, string>> = {
   CLOSED: "The HTTP session is closed.",
@@ -20,6 +23,9 @@ const violationMessages: Readonly<Record<HttpSessionViolation, string>> = {
   NETWORK_FAILURE: "The upstream network request failed.",
   MISSING_REDIRECT_LOCATION: "The upstream redirect response did not contain a Location header.",
   REDIRECT_LIMIT_EXCEEDED: "The upstream redirect limit was exceeded.",
+  REQUEST_ABORTED: "The HTTP request was aborted by the caller.",
+  REQUEST_TIMEOUT: "The upstream HTTP request timed out.",
+  RESPONSE_TOO_LARGE: "The upstream response body exceeded the size limit.",
 };
 
 export class HttpSessionError extends Error {

@@ -6,7 +6,7 @@ import {
   type HttpSessionRequest,
   type HttpSessionResponse,
 } from "./http-session.js";
-import { SessionCookieJar } from "./session-cookie-jar.js";
+import { SessionCookieJar, SessionCookieJarError } from "./session-cookie-jar.js";
 import { createOfficialUpstreamUrlPolicy, type UpstreamUrlPolicy } from "./upstream-url-policy.js";
 
 export type FetchImplementation = (
@@ -16,7 +16,21 @@ export type FetchImplementation = (
 
 export interface FetchHttpSessionOptions {
   readonly fetchImplementation?: FetchImplementation;
+  readonly maxResponseBytes?: number;
+  readonly requestTimeoutMs?: number;
   readonly urlPolicy?: UpstreamUrlPolicy;
+}
+
+export const defaultRequestTimeoutMs = 30_000;
+export const maximumRequestTimeoutMs = 120_000;
+export const defaultMaxResponseBytes = 5 * 1024 * 1024;
+export const maximumMaxResponseBytes = 20 * 1024 * 1024;
+
+type AbortSource = "caller" | "closed" | "timeout";
+
+interface ActiveRequest {
+  readonly controller: AbortController;
+  abortSource: AbortSource | null;
 }
 
 const forbiddenRequestHeaders = new Set([
@@ -60,16 +74,136 @@ const collectResponseHeaders = (headers: Headers): HttpResponseHeaders => {
   return Object.freeze(collected);
 };
 
+const assertIntegerLimit = (name: string, value: number, maximum: number): number => {
+  if (!Number.isInteger(value) || value <= 0 || value > maximum) {
+    throw new TypeError(`${name} must be a positive integer no greater than ${maximum}.`);
+  }
+  return value;
+};
+
+const abortActiveRequest = (request: ActiveRequest, source: AbortSource): void => {
+  if (request.abortSource !== null) return;
+  request.abortSource = source;
+  request.controller.abort();
+};
+
+const isAborted = (signal: AbortSignal | undefined): boolean => signal?.aborted === true;
+
+interface AbortWaiter {
+  readonly dispose: () => void;
+  readonly promise: Promise<never>;
+}
+
+const createAbortWaiter = (signal: AbortSignal): AbortWaiter => {
+  let rejectAborted: () => void = () => undefined;
+  const promise = new Promise<never>((_, reject) => {
+    rejectAborted = (): void => reject(new Error("The HTTP operation was aborted."));
+  });
+
+  if (signal.aborted) rejectAborted();
+  else signal.addEventListener("abort", rejectAborted, { once: true });
+
+  return {
+    dispose: () => signal.removeEventListener("abort", rejectAborted),
+    promise,
+  };
+};
+
+const runUntilAborted = async <Result>(
+  operation: Promise<Result>,
+  signal: AbortSignal,
+): Promise<Result> => {
+  const aborted = createAbortWaiter(signal);
+  try {
+    return await Promise.race([operation, aborted.promise]);
+  } finally {
+    aborted.dispose();
+  }
+};
+
+const responseExceedsDeclaredLimit = (response: Response, maximumBytes: number): boolean => {
+  const contentLength = response.headers.get("content-length");
+  return (
+    contentLength !== null &&
+    /^\d+$/.test(contentLength) &&
+    BigInt(contentLength) > BigInt(maximumBytes)
+  );
+};
+
+const cancelResponseBody = (response: Response): void => {
+  response.body?.cancel().catch(() => undefined);
+};
+
+const readResponseBody = async (
+  response: Response,
+  maximumBytes: number,
+  signal: AbortSignal,
+): Promise<Uint8Array> => {
+  if (responseExceedsDeclaredLimit(response, maximumBytes)) {
+    cancelResponseBody(response);
+    throw new HttpSessionError("RESPONSE_TOO_LARGE");
+  }
+  if (response.body === null) return new Uint8Array();
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  let completed = false;
+
+  const aborted = createAbortWaiter(signal);
+  try {
+    while (true) {
+      const result = await Promise.race([reader.read(), aborted.promise]);
+      if (result.done) {
+        completed = true;
+        break;
+      }
+
+      totalBytes += result.value.byteLength;
+      if (totalBytes > maximumBytes) {
+        reader.cancel().catch(() => undefined);
+        throw new HttpSessionError("RESPONSE_TOO_LARGE");
+      }
+      chunks.push(result.value);
+    }
+  } finally {
+    aborted.dispose();
+    if (!completed) reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+};
+
 /** Node fetch transport with manual redirects and private per-session cookies. */
 export class FetchHttpSession implements HttpSession {
+  readonly #activeRequests = new Set<ActiveRequest>();
   readonly #cookieJar: SessionCookieJar;
   readonly #fetch: FetchImplementation;
+  readonly #maxResponseBytes: number;
+  readonly #requestTimeoutMs: number;
   readonly #urlPolicy: UpstreamUrlPolicy;
   #closed = false;
 
   constructor(options: FetchHttpSessionOptions = {}) {
     this.#urlPolicy = options.urlPolicy ?? createOfficialUpstreamUrlPolicy();
     this.#fetch = options.fetchImplementation ?? globalThis.fetch.bind(globalThis);
+    this.#requestTimeoutMs = assertIntegerLimit(
+      "requestTimeoutMs",
+      options.requestTimeoutMs ?? defaultRequestTimeoutMs,
+      maximumRequestTimeoutMs,
+    );
+    this.#maxResponseBytes = assertIntegerLimit(
+      "maxResponseBytes",
+      options.maxResponseBytes ?? defaultMaxResponseBytes,
+      maximumMaxResponseBytes,
+    );
     this.#cookieJar = new SessionCookieJar({ urlPolicy: this.#urlPolicy });
   }
 
@@ -78,48 +212,86 @@ export class FetchHttpSession implements HttpSession {
     if ((request.method === "GET" || request.method === "HEAD") && request.body !== undefined) {
       throw new HttpSessionError("INVALID_REQUEST_BODY");
     }
+    if (isAborted(request.signal)) throw new HttpSessionError("REQUEST_ABORTED");
 
     const url = this.#urlPolicy.assertAllowed(request.url);
-    const cookieHeader = await this.#cookieJar.getCookieHeader(url);
-    const headers = createRequestHeaders(request, cookieHeader);
-    const body = createRequestBody(request.body);
-
-    let response: Response;
-    try {
-      response = await this.#fetch(url, {
-        method: request.method,
-        headers,
-        redirect: "manual",
-        credentials: "omit",
-        cache: "no-store",
-        ...(body === undefined ? {} : { body }),
-        ...(request.signal === undefined ? {} : { signal: request.signal }),
-      });
-    } catch {
-      throw new HttpSessionError("NETWORK_FAILURE");
-    }
-
-    await this.#cookieJar.storeFromResponse(url, response.headers.getSetCookie());
-
-    let bodyBytes: Uint8Array;
-    try {
-      bodyBytes = new Uint8Array(await response.arrayBuffer());
-    } catch {
-      throw new HttpSessionError("NETWORK_FAILURE");
-    }
-
-    return {
-      status: response.status,
-      url,
-      headers: collectResponseHeaders(response.headers),
-      body: bodyBytes,
+    const activeRequest: ActiveRequest = {
+      controller: new AbortController(),
+      abortSource: null,
     };
+    const abortFromCaller = (): void => abortActiveRequest(activeRequest, "caller");
+    request.signal?.addEventListener("abort", abortFromCaller, { once: true });
+    if (isAborted(request.signal)) abortFromCaller();
+    this.#activeRequests.add(activeRequest);
+    const timeout = setTimeout(
+      () => abortActiveRequest(activeRequest, "timeout"),
+      this.#requestTimeoutMs,
+    );
+    timeout.unref();
+
+    try {
+      const cookieHeader = await this.#cookieJar.getCookieHeader(url);
+      if (activeRequest.controller.signal.aborted) {
+        throw new Error("The HTTP operation was aborted.");
+      }
+      const headers = createRequestHeaders(request, cookieHeader);
+      const body = createRequestBody(request.body);
+
+      const response = await runUntilAborted(
+        this.#fetch(url, {
+          method: request.method,
+          headers,
+          redirect: "manual",
+          credentials: "omit",
+          cache: "no-store",
+          signal: activeRequest.controller.signal,
+          ...(body === undefined ? {} : { body }),
+        }),
+        activeRequest.controller.signal,
+      );
+      await this.#cookieJar.storeFromResponse(url, response.headers.getSetCookie());
+      if (activeRequest.controller.signal.aborted) {
+        cancelResponseBody(response);
+        throw new Error("The HTTP operation was aborted.");
+      }
+      const bodyBytes = await readResponseBody(
+        response,
+        this.#maxResponseBytes,
+        activeRequest.controller.signal,
+      );
+
+      return {
+        status: response.status,
+        url,
+        headers: collectResponseHeaders(response.headers),
+        body: bodyBytes,
+      };
+    } catch (error: unknown) {
+      if (this.#closed || activeRequest.abortSource === "closed") {
+        throw new HttpSessionError("CLOSED");
+      }
+      if (activeRequest.abortSource === "timeout") {
+        throw new HttpSessionError("REQUEST_TIMEOUT");
+      }
+      if (activeRequest.abortSource === "caller") {
+        throw new HttpSessionError("REQUEST_ABORTED");
+      }
+      if (error instanceof HttpSessionError || error instanceof SessionCookieJarError) {
+        throw error;
+      }
+      throw new HttpSessionError("NETWORK_FAILURE");
+    } finally {
+      clearTimeout(timeout);
+      request.signal?.removeEventListener("abort", abortFromCaller);
+      this.#activeRequests.delete(activeRequest);
+    }
   }
 
   async close(): Promise<void> {
     if (this.#closed) return;
-    await this.#cookieJar.close();
     this.#closed = true;
+    for (const request of this.#activeRequests) abortActiveRequest(request, "closed");
+    await this.#cookieJar.close();
   }
 
   toJSON(): { readonly closed: boolean } {
