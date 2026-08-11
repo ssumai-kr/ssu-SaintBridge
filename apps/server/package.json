@@ -11,7 +11,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@ssu-saintbridge/protocol": "workspace:*",
-    "@ssu-saintbridge/types": "workspace:*"
+    "@ssu-saintbridge/facade": "workspace:*"
   }
 }

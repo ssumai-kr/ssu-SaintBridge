@@ -1,5 +1,5 @@
 {
-  "name": "@ssu-saintbridge/protocol",
+  "name": "@ssu-saintbridge/client",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,12 +15,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "node -e \"import('node:fs').then(({rmSync}) => rmSync('dist', { recursive: true, force: true }))\"",
-    "lint": "eslint src test --max-warnings 0",
-    "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
+    "lint": "eslint src --max-warnings 0",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@ssu-saintbridge/types": "workspace:*",
-    "tough-cookie": "6.0.2"
+    "@ssu-saintbridge/types": "workspace:*"
   }
 }

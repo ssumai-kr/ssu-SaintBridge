@@ -1,6 +1,6 @@
-import { createInitialProtocolStatus } from "@ssu-saintbridge/protocol";
+import { createInitialBridgeStatus } from "@ssu-saintbridge/facade";
 
 export const getServiceInfo = () => ({
   name: "@ssu-saintbridge/server",
-  protocol: createInitialProtocolStatus(),
+  auth: createInitialBridgeStatus(),
 });

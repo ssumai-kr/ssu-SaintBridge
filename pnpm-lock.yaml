@@ -41,27 +41,78 @@ importers:
 
   apps/cli:
     dependencies:
-      '@ssu-saintbridge/protocol':
+      '@ssu-saintbridge/facade':
         specifier: workspace:*
-        version: link:../../packages/protocol
-      '@ssu-saintbridge/types':
-        specifier: workspace:*
-        version: link:../../packages/types
+        version: link:../../packages/facade
 
   apps/server:
     dependencies:
-      '@ssu-saintbridge/protocol':
+      '@ssu-saintbridge/facade':
         specifier: workspace:*
-        version: link:../../packages/protocol
+        version: link:../../packages/facade
+
+  packages/auth:
+    dependencies:
+      '@ssu-saintbridge/transport':
+        specifier: workspace:*
+        version: link:../transport
       '@ssu-saintbridge/types':
         specifier: workspace:*
-        version: link:../../packages/types
+        version: link:../types
 
-  packages/protocol:
+  packages/client:
     dependencies:
       '@ssu-saintbridge/types':
         specifier: workspace:*
         version: link:../types
+
+  packages/facade:
+    dependencies:
+      '@ssu-saintbridge/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@ssu-saintbridge/library':
+        specifier: workspace:*
+        version: link:../library
+      '@ssu-saintbridge/lms':
+        specifier: workspace:*
+        version: link:../lms
+      '@ssu-saintbridge/types':
+        specifier: workspace:*
+        version: link:../types
+      '@ssu-saintbridge/usaint':
+        specifier: workspace:*
+        version: link:../usaint
+
+  packages/library:
+    dependencies:
+      '@ssu-saintbridge/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@ssu-saintbridge/types':
+        specifier: workspace:*
+        version: link:../types
+
+  packages/lms:
+    dependencies:
+      '@ssu-saintbridge/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@ssu-saintbridge/types':
+        specifier: workspace:*
+        version: link:../types
+
+  packages/mock:
+    dependencies:
+      '@ssu-saintbridge/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@ssu-saintbridge/types':
+        specifier: workspace:*
+        version: link:../types
+
+  packages/transport:
+    dependencies:
       tough-cookie:
         specifier: 6.0.2
         version: 6.0.2
@@ -71,6 +122,15 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 4.4.3
+
+  packages/usaint:
+    dependencies:
+      '@ssu-saintbridge/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@ssu-saintbridge/types':
+        specifier: workspace:*
+        version: link:../types
 
 packages:
 

@@ -1,35 +1,38 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  isSaintError,
-  SaintError,
-  saintErrorCodeSchema,
-  saintErrorPayloadSchema,
+  isSaintBridgeError,
+  SaintBridgeError,
+  saintBridgeErrorCodeSchema,
+  saintBridgeErrorPayloadSchema,
 } from "../src/index.js";
 
-describe("SaintError", () => {
+describe("SaintBridgeError", () => {
   it("assigns retryability from the error code", () => {
-    const retryable = new SaintError({
+    const retryable = new SaintBridgeError({
       code: "UPSTREAM_UNAVAILABLE",
+      provider: "lms",
     });
-    const terminal = new SaintError({
+    const terminal = new SaintBridgeError({
       code: "INVALID_CREDENTIALS",
     });
 
     expect(retryable.retryable).toBe(true);
     expect(terminal.retryable).toBe(false);
-    expect(isSaintError(retryable)).toBe(true);
+    expect(isSaintBridgeError(retryable)).toBe(true);
   });
 
   it("serializes only the safe public payload", () => {
-    const error = new SaintError({
-      code: "SSO_FLOW_CHANGED",
+    const error = new SaintBridgeError({
+      code: "AUTH_FLOW_CHANGED",
       cause: new Error("canary-password=do-not-leak"),
+      provider: "usaint",
     });
 
     expect(JSON.parse(JSON.stringify(error))).toEqual({
-      code: "SSO_FLOW_CHANGED",
-      message: "The upstream SSO flow no longer matches the expected contract.",
+      code: "AUTH_FLOW_CHANGED",
+      message: "The upstream authentication flow no longer matches the expected contract.",
+      provider: "usaint",
       retryable: false,
     });
     expect(JSON.stringify(error)).not.toContain("canary-password");
@@ -37,7 +40,7 @@ describe("SaintError", () => {
 
   it("uses a controlled message instead of an upstream cause", () => {
     const canary = "UPSTREAM_HTML_CANARY";
-    const error = new SaintError({
+    const error = new SaintBridgeError({
       code: "PARSER_MISMATCH",
       cause: new Error(canary),
     });
@@ -49,12 +52,12 @@ describe("SaintError", () => {
 
 describe("error schemas", () => {
   it("rejects an unknown error code", () => {
-    expect(saintErrorCodeSchema.safeParse("UNKNOWN").success).toBe(false);
+    expect(saintBridgeErrorCodeSchema.safeParse("UNKNOWN").success).toBe(false);
   });
 
   it("rejects extra fields in a public payload", () => {
     expect(
-      saintErrorPayloadSchema.safeParse({
+      saintBridgeErrorPayloadSchema.safeParse({
         code: "PARSER_MISMATCH",
         message: "Unexpected markup.",
         retryable: false,

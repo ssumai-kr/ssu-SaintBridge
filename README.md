@@ -40,7 +40,7 @@ Each provider receives an independent cookie jar and lifecycle. A failure or exp
 
 ## Current Status
 
-SaintBridge is in pre-`v0.1` development. The repository already contains the foundation and secure HTTP transport developed for the original u-SAINT-only scope. The revised multi-provider roadmap begins by realigning those contracts and package boundaries before implementing **M2 Auth Orchestrator (`AUTH-01` through `AUTH-08`)**.
+SaintBridge is in pre-`v0.1` development. The multi-provider package graph, shared provider contracts, credential-free mock matrix, and provider-isolated HTTP session registry are in place. The next milestone begins with **M2 Auth Orchestrator (`AUTH-01` through `AUTH-08`)**.
 
 The project cannot yet be used to sign in to school services or retrieve academic information.
 
@@ -55,29 +55,29 @@ The project cannot yet be used to sign in to school services or retrieve academi
 - **Evidence-aware:** Preserve source and freshness metadata for decisions involving important academic information.
 - **Mock-first development:** Support most development and testing without real credentials or live school requests.
 
-## Planned Package Architecture
+## Package Architecture
 
 ```text
-types
-  ↑
-auth ← provider adapters (usaint / lms / library)
-  ↑                 ↑
-facade ────────────┘
-  ↑
-server / cli / client / mock
+auth → transport, types
+usaint / lms / library → auth, types
+facade → auth, provider adapters, types
+server / cli → facade
+client → types
+mock → auth, types
 ```
 
-| Package   | Responsibility                                                      |
-| --------- | ------------------------------------------------------------------- |
-| `types`   | Shared provider, session, scope, source, event, and error contracts |
-| `auth`    | Managed browser login and provider session orchestration            |
-| `usaint`  | SAP portal, Web Dynpro, and academic adapters                       |
-| `lms`     | LearningX course, announcement, and assignment adapters             |
-| `library` | Public catalog and delegated personal library adapters              |
-| `facade`  | Unified Node.js developer API                                       |
-| `server`  | Local REST API, session management, and OpenAPI                     |
-| `client`  | Type-safe REST client and React integration                         |
-| `mock`    | Credential-free providers, fixtures, and scenarios                  |
+| Package     | Responsibility                                                      |
+| ----------- | ------------------------------------------------------------------- |
+| `types`     | Shared provider, session, scope, source, event, and error contracts |
+| `transport` | HTTPS, redirects, provider-isolated cookies, limits, and decoding   |
+| `auth`      | Managed browser login and provider session orchestration            |
+| `usaint`    | SAP portal, Web Dynpro, and academic adapters                       |
+| `lms`       | LearningX course, announcement, and assignment adapters             |
+| `library`   | Public catalog and delegated personal library adapters              |
+| `facade`    | Unified Node.js developer API                                       |
+| `server`    | Local REST API, session management, and OpenAPI                     |
+| `client`    | Type-safe REST client and React integration                         |
+| `mock`      | Credential-free providers, fixtures, and scenarios                  |
 
 Package names and npm scopes remain provisional until availability and trademark-confusion checks are complete.
 

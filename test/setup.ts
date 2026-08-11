@@ -1,3 +1,3 @@
-import { installTestNetworkGuard } from "../packages/protocol/test/support/network-guard.js";
+import { installTestNetworkGuard } from "../packages/transport/test/support/network-guard.js";
 
 installTestNetworkGuard();

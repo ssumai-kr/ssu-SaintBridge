@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import { createInitialProtocolStatus } from "@ssu-saintbridge/protocol";
+import { createInitialBridgeStatus } from "@ssu-saintbridge/facade";
 
 export const getCliInfo = () => ({
   name: "ssu-saintbridge",
-  protocol: createInitialProtocolStatus(),
+  auth: createInitialBridgeStatus(),
 });
 
 if (process.argv[1]?.endsWith("index.js")) {

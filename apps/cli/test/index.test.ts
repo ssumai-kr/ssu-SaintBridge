@@ -4,6 +4,9 @@ import { getCliInfo } from "../src/index.js";
 
 describe("cli package", () => {
   it("exposes CLI metadata", () => {
-    expect(getCliInfo().name).toBe("ssu-saintbridge");
+    expect(getCliInfo()).toEqual({
+      name: "ssu-saintbridge",
+      auth: { state: "signed-out", providers: [] },
+    });
   });
 });

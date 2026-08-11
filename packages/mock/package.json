@@ -1,11 +1,17 @@
 {
-  "name": "@ssu-saintbridge/cli",
+  "name": "@ssu-saintbridge/mock",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "ssu-saintbridge": "./dist/index.js"
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "node -e \"import('node:fs').then(({rmSync}) => rmSync('dist', { recursive: true, force: true }))\"",
@@ -14,6 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@ssu-saintbridge/facade": "workspace:*"
+    "@ssu-saintbridge/auth": "workspace:*",
+    "@ssu-saintbridge/types": "workspace:*"
   }
 }

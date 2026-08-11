@@ -2,7 +2,7 @@
   "name": "ssu-saintbridge",
   "version": "0.0.0",
   "private": true,
-  "description": "Unofficial, local-first u-SAINT protocol client and REST server",
+  "description": "Unofficial, local-first bridge for Soongsil University services",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "engines": {
