@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@ssu-saintbridge/transport": "workspace:*",
-    "@ssu-saintbridge/types": "workspace:*"
+    "@ssu-saintbridge/types": "workspace:*",
+    "playwright": "1.62.0"
   }
 }
