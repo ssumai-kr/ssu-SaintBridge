@@ -2,17 +2,18 @@ import type { HttpSession } from "@ssu-saintbridge/transport";
 import type {
   AuthSourceId,
   AuthSnapshot,
-  BrowserLoginRequest,
+  AuthInputMode,
   ProviderDescriptor,
   ProviderId,
   ProviderSession,
   Scope,
 } from "@ssu-saintbridge/types";
 
-export type { BrowserLoginRequest } from "@ssu-saintbridge/types";
+import type { AuthLoginRequest } from "./transient-credentials.js";
 
 export interface ProviderCallbackContext {
   readonly authSource: AuthSourceId;
+  readonly inputMode: AuthInputMode;
   readonly requestedScopes: readonly Scope[];
   readonly transport: HttpSession;
 }
@@ -23,7 +24,7 @@ export interface ProviderAdapter {
 }
 
 export interface AuthOrchestrator {
-  login(request: BrowserLoginRequest): Promise<AuthSnapshot>;
+  login(request: AuthLoginRequest): Promise<AuthSnapshot>;
   logout(authSource: AuthSourceId): Promise<AuthSnapshot>;
   getSnapshot(): AuthSnapshot;
   close(): Promise<void>;

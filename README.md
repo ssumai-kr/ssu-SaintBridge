@@ -1,6 +1,6 @@
 # SaintBridge
 
-SaintBridge is a local-first, unofficial open-source platform that provides secure and consistent APIs for Soongsil University's u-SAINT, LMS, and Central Library services through official SmartID and Library login flows.
+SaintBridge is a local-first, unofficial open-source platform that provides secure and consistent APIs for Soongsil University's u-SAINT, LMS, and Central Library services through SmartID and Library authentication.
 
 It is designed for student developers who want to build unified class, assignment, announcement, timetable, and library tools without directly handling SAP Web Dynpro, LearningX, service-specific cookies, or SSO callbacks.
 
@@ -27,7 +27,12 @@ Application, submission, modification, attendance manipulation, reservation, pay
 
 ## Authentication Model
 
-SaintBridge does not accept a student ID or password through its API. Authentication is performed by the user directly on the relevant official sign-in page inside an isolated, visible, managed browser context.
+SaintBridge supports two explicit input modes for both SmartID and Library authentication:
+
+- `official-browser` opens the relevant official sign-in page in an isolated, visible, managed browser. SaintBridge never receives the password in this mode.
+- `application-credentials` lets a trusted Node.js application, local companion, desktop app, or developer-controlled backend provide credentials through a one-shot `TransientCredentials` boundary. This enables a second-party custom login UI without persisting credentials in SaintBridge state.
+
+The official browser mode is the recommended default. Application credential mode is an advanced integration surface: the application that renders the custom form becomes responsible for protecting the credentials in transit and in memory. A browser-only SPA must use a trusted backend or local companion; it must not send credentials directly to school services.
 
 ```text
 Authentication sources
@@ -46,13 +51,13 @@ Each authentication source and provider receives an independent lifecycle and co
 
 ## Current Status
 
-SaintBridge is in pre-`v0.1` development. The multi-provider package graph, separate SmartID and Library authentication contracts, credential-free mock matrix, and provider-isolated HTTP session registry are in place. The next milestone begins with **M2 Auth Orchestrator (`AUTH-01` through `AUTH-08`)**.
+SaintBridge is in pre-`v0.1` development. The multi-provider package graph, separate SmartID and Library authentication contracts, dual input-mode request boundary, credential-redacting one-shot container, mock matrix, and provider-isolated HTTP session registry are in place. The next milestone begins with **M2 Auth Orchestrator (`AUTH-01` through `AUTH-08`)**.
 
 The project cannot yet be used to sign in to school services or retrieve academic information.
 
 ## Design Principles
 
-- **Official interactive authentication:** Support SmartID SSO and Library login without accepting credentials through the SaintBridge API.
+- **Two explicit authentication modes:** Recommend official interactive login while supporting custom application login UIs through a transient credential boundary.
 - **Comprehensive read APIs:** Make provider information easy to reuse through typed, provider-specific APIs before adding higher-level unified views.
 - **Normalized contracts:** Return stable public models instead of provider-specific screen and control identifiers.
 - **Local-first security:** Keep credentials and student data on the user's device by default.
@@ -77,7 +82,7 @@ mock → auth, types
 | ----------- | ------------------------------------------------------------------- |
 | `types`     | Shared provider, session, scope, source, event, and error contracts |
 | `transport` | HTTPS, redirects, provider-isolated cookies, limits, and decoding   |
-| `auth`      | Managed browser login and provider session orchestration            |
+| `auth`      | Login input boundaries and provider session orchestration           |
 | `usaint`    | SAP portal, Web Dynpro, and academic adapters                       |
 | `lms`       | LearningX course, announcement, and assignment adapters             |
 | `library`   | Public, SmartID-delegated, and Library-authenticated adapters       |
@@ -107,7 +112,9 @@ pnpm verify
 - Never commit real passwords, cookies, SSO tokens, student HTML/XML, screenshots, session dumps, or raw HAR files.
 - Do not bypass multi-factor authentication, CAPTCHA, account locks, rate limits, or other access controls.
 - Do not read cookies from the user's existing system browser profile.
-- Accept credentials only through the relevant official page in the managed browser, never through the SaintBridge API surface.
+- Prefer the official managed-browser flow whenever a custom login UI is unnecessary.
+- In application credential mode, acquire credentials only at login time, consume them once, and never place them in snapshots, logs, fixtures, serialized session state, persistent storage, or telemetry.
+- Run custom login UIs only with a trusted local companion, desktop runtime, or properly secured developer-controlled backend. Do not expose a centralized project-operated credential proxy.
 - Keep provider cookie jars separate and treat every session token as a credential.
 - Do not log request or response bodies containing credentials or personal information.
 - Do not operate a project-controlled centralized login proxy or retain student academic data on a project-controlled server.

@@ -15,6 +15,7 @@ describe("provider contracts", () => {
     expect(
       browserLoginRequestSchema.safeParse({
         authSource: "smartid",
+        mode: "official-browser",
         scopes: ["usaint:profile.read"],
         studentId: "not-accepted",
         password: "not-accepted",
@@ -93,8 +94,18 @@ describe("provider contracts", () => {
         .parse({
           state: "open",
           authSources: [
-            { source: "smartid", status: "authenticated", expiresAt: null },
-            { source: "library", status: "authenticated", expiresAt: null },
+            {
+              source: "smartid",
+              inputMode: "official-browser",
+              status: "authenticated",
+              expiresAt: null,
+            },
+            {
+              source: "library",
+              inputMode: "application-credentials",
+              status: "authenticated",
+              expiresAt: null,
+            },
           ],
           providers: [
             {
@@ -133,7 +144,14 @@ describe("provider contracts", () => {
     expect(
       authSnapshotSchema.safeParse({
         state: "open",
-        authSources: [{ source: "smartid", status: "expired", expiresAt: null }],
+        authSources: [
+          {
+            source: "smartid",
+            inputMode: "official-browser",
+            status: "expired",
+            expiresAt: null,
+          },
+        ],
         providers: [
           {
             provider: "usaint",

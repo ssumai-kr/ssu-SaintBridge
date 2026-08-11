@@ -29,6 +29,10 @@ export const authLifecycleStates = ["open", "closed"] as const;
 export const authLifecycleStateSchema = z.enum(authLifecycleStates);
 export type AuthLifecycleState = z.infer<typeof authLifecycleStateSchema>;
 
+export const authInputModes = ["official-browser", "application-credentials"] as const;
+export const authInputModeSchema = z.enum(authInputModes);
+export type AuthInputMode = z.infer<typeof authInputModeSchema>;
+
 export const scopes = [
   "usaint:profile.read",
   "usaint:timetable.read",
@@ -64,28 +68,67 @@ export const providerForScope = (scope: Scope): ProviderId =>
 
 export const isSensitiveScope = (scope: Scope): boolean => sensitiveScopeSet.has(scope);
 
-export const browserLoginRequestSchema = z
+const scopedAuthRequestIssues = (request: {
+  readonly authSource: AuthSourceId;
+  readonly scopes: readonly Scope[];
+}): readonly string[] => {
+  const issues: string[] = [];
+  if (new Set(request.scopes).size !== request.scopes.length) {
+    issues.push("Requested scopes must be unique.");
+  }
+  if (
+    request.authSource === "library" &&
+    request.scopes.some((scope) => providerForScope(scope) !== "library")
+  ) {
+    issues.push("Library authentication can only request library scopes.");
+  }
+  return issues;
+};
+
+const addScopedAuthRequestIssues = (
+  request: { readonly authSource: AuthSourceId; readonly scopes: readonly Scope[] },
+  addIssue: (message: string) => void,
+): void => {
+  for (const message of scopedAuthRequestIssues(request)) addIssue(message);
+};
+
+export const interactiveBrowserLoginRequestSchema = z
   .object({
     authSource: authSourceIdSchema,
+    mode: z.literal("official-browser"),
     scopes: z.array(scopeSchema).readonly(),
   })
   .strict()
-  .superRefine((request, context) => {
-    if (new Set(request.scopes).size !== request.scopes.length) {
-      context.addIssue({ code: "custom", message: "Requested scopes must be unique." });
-    }
-    if (
-      request.authSource === "library" &&
-      request.scopes.some((scope) => providerForScope(scope) !== "library")
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "Library authentication can only request library scopes.",
-      });
-    }
-  })
+  .superRefine((request, context) =>
+    addScopedAuthRequestIssues(request, (message) => context.addIssue({ code: "custom", message })),
+  )
   .readonly();
-export type BrowserLoginRequest = z.infer<typeof browserLoginRequestSchema>;
+export type InteractiveBrowserLoginRequest = z.infer<typeof interactiveBrowserLoginRequestSchema>;
+
+export const applicationCredentialLoginMetadataSchema = z
+  .object({
+    authSource: authSourceIdSchema,
+    mode: z.literal("application-credentials"),
+    scopes: z.array(scopeSchema).readonly(),
+  })
+  .strict()
+  .superRefine((request, context) =>
+    addScopedAuthRequestIssues(request, (message) => context.addIssue({ code: "custom", message })),
+  )
+  .readonly();
+export type ApplicationCredentialLoginMetadata = z.infer<
+  typeof applicationCredentialLoginMetadataSchema
+>;
+
+export const authLoginMetadataSchema = z.discriminatedUnion("mode", [
+  interactiveBrowserLoginRequestSchema,
+  applicationCredentialLoginMetadataSchema,
+]);
+export type AuthLoginMetadata = z.infer<typeof authLoginMetadataSchema>;
+
+// Compatibility aliases for the original interactive-only contract.
+export const browserLoginRequestSchema = interactiveBrowserLoginRequestSchema;
+export type BrowserLoginRequest = InteractiveBrowserLoginRequest;
 
 export const providerCapabilityIdSchema = z
   .string()
@@ -170,6 +213,7 @@ export type ProviderSession = z.infer<typeof providerSessionSchema>;
 export const authSourceSessionSchema = z
   .object({
     source: authSourceIdSchema,
+    inputMode: authInputModeSchema,
     status: authSourceStatusSchema,
     expiresAt: isoTimestampSchema.nullable(),
   })

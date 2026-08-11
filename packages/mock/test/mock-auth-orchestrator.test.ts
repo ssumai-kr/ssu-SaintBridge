@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TransientCredentials } from "@ssu-saintbridge/auth";
 
 import {
   createMockAuthMatrix,
@@ -10,8 +11,18 @@ import {
 const loginAllProviders = async (
   auth: ReturnType<typeof createMockAuthMatrix>["mock-user-a"],
 ): Promise<void> => {
-  await auth.login({ authSource: "smartid", scopes: mockSmartIdScopes });
-  await auth.login({ authSource: "library", scopes: mockLibraryScopes });
+  await auth.login({
+    authSource: "smartid",
+    mode: "official-browser",
+    scopes: mockSmartIdScopes,
+  });
+  await auth.login({
+    authSource: "library",
+    mode: "application-credentials",
+    scopes: mockLibraryScopes,
+    acquireCredentials: () =>
+      new TransientCredentials({ identifier: "mock-user", password: "mock-password" }),
+  });
 };
 
 describe("mock auth matrix", () => {
@@ -51,18 +62,64 @@ describe("mock auth matrix", () => {
     const auth = createMockAuthMatrix()["mock-user-a"];
     const snapshot = await auth.login({
       authSource: "library",
+      mode: "official-browser",
       scopes: ["library:loans.read"],
     });
 
     expect(snapshot.authSources).toEqual([
-      { source: "library", status: "authenticated", expiresAt: null },
+      {
+        source: "library",
+        inputMode: "official-browser",
+        status: "authenticated",
+        expiresAt: null,
+      },
     ]);
     expect(snapshot.providers).toEqual([
       expect.objectContaining({ provider: "library", authenticatedBy: "library" }),
     ]);
     await expect(
-      auth.login({ authSource: "library", scopes: ["usaint:profile.read"] }),
+      auth.login({
+        authSource: "library",
+        mode: "official-browser",
+        scopes: ["usaint:profile.read"],
+      }),
     ).rejects.toThrow("only request library scopes");
+  });
+
+  it("consumes application credentials once without retaining them", async () => {
+    const auth = createMockAuthMatrix()["mock-user-a"];
+    const credentials = new TransientCredentials({
+      identifier: "mock-user",
+      password: "mock-password",
+    });
+    const snapshot = await auth.login({
+      authSource: "smartid",
+      mode: "application-credentials",
+      scopes: mockSmartIdScopes,
+      acquireCredentials: () => credentials,
+    });
+
+    expect(credentials.released).toBe(true);
+    expect(snapshot.authSources).toEqual([
+      expect.objectContaining({ source: "smartid", inputMode: "application-credentials" }),
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain("mock-password");
+  });
+
+  it("does not mutate auth state when credential acquisition fails", async () => {
+    const auth = createMockAuthMatrix()["mock-user-a"];
+
+    await expect(
+      auth.login({
+        authSource: "smartid",
+        mode: "application-credentials",
+        scopes: mockSmartIdScopes,
+        acquireCredentials: () => {
+          throw new Error("credential input cancelled");
+        },
+      }),
+    ).rejects.toThrow("credential input cancelled");
+    expect(auth.getSnapshot()).toEqual({ state: "open", authSources: [], providers: [] });
   });
 
   it("represents public library access without an auth source", () => {

@@ -1,8 +1,12 @@
-import type { AuthOrchestrator, BrowserLoginRequest } from "@ssu-saintbridge/auth";
+import {
+  parseAuthLoginRequest,
+  TransientCredentials,
+  type AuthLoginRequest,
+  type AuthOrchestrator,
+} from "@ssu-saintbridge/auth";
 import {
   authSnapshotSchema,
   authSourceIdSchema,
-  browserLoginRequestSchema,
   providerForScope,
   providerIdSchema,
   providerSessionSchema,
@@ -89,9 +93,16 @@ export class MockAuthOrchestrator implements AuthOrchestrator {
     this.userKey = userKey;
   }
 
-  async login(request: BrowserLoginRequest): Promise<AuthSnapshot> {
+  async login(request: AuthLoginRequest): Promise<AuthSnapshot> {
     this.#assertOpen();
-    const parsedRequest = browserLoginRequestSchema.parse(request);
+    const parsedRequest = parseAuthLoginRequest(request);
+    if (parsedRequest.mode === "application-credentials") {
+      const credentials = await parsedRequest.acquireCredentials();
+      if (!(credentials instanceof TransientCredentials)) {
+        throw new TypeError("The credential provider must return TransientCredentials.");
+      }
+      await credentials.withCredentials(async () => undefined);
+    }
     const authSource = parsedRequest.authSource;
     const scopes = parsedRequest.scopes;
 
@@ -101,7 +112,12 @@ export class MockAuthOrchestrator implements AuthOrchestrator {
       state: "open",
       authSources: [
         ...this.#snapshot.authSources.filter(({ source }) => source !== authSource),
-        { source: authSource, status: "authenticated", expiresAt: null },
+        {
+          source: authSource,
+          inputMode: parsedRequest.mode,
+          status: "authenticated",
+          expiresAt: null,
+        },
       ],
       providers: [
         ...this.#snapshot.providers.filter(
