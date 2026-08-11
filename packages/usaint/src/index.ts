@@ -3,6 +3,8 @@ import { providerDescriptorSchema } from "@ssu-saintbridge/types";
 
 export const usaintProviderDescriptor = providerDescriptorSchema.parse({
   provider: "usaint",
+  supportedAuthSources: ["smartid"],
+  supportsPublicAccess: false,
   supportedScopes: [
     "usaint:profile.read",
     "usaint:timetable.read",

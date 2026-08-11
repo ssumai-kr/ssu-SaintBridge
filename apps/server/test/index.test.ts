@@ -6,7 +6,7 @@ describe("server package", () => {
   it("exposes service metadata", () => {
     expect(getServiceInfo()).toEqual({
       name: "@ssu-saintbridge/server",
-      auth: { state: "signed-out", providers: [] },
+      auth: { state: "open", authSources: [], providers: [] },
     });
   });
 });

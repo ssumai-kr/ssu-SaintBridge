@@ -6,7 +6,7 @@ describe("cli package", () => {
   it("exposes CLI metadata", () => {
     expect(getCliInfo()).toEqual({
       name: "ssu-saintbridge",
-      auth: { state: "signed-out", providers: [] },
+      auth: { state: "open", authSources: [], providers: [] },
     });
   });
 });

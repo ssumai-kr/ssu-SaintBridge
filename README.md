@@ -1,6 +1,6 @@
 # SaintBridge
 
-SaintBridge is a local-first, unofficial open-source platform that provides secure and consistent APIs for Soongsil University's u-SAINT, LMS, and Central Library services through a single interactive login experience.
+SaintBridge is a local-first, unofficial open-source platform that provides secure and consistent APIs for Soongsil University's u-SAINT, LMS, and Central Library services through official SmartID and Library login flows.
 
 It is designed for student developers who want to build unified class, assignment, announcement, timetable, and library tools without directly handling SAP Web Dynpro, LearningX, service-specific cookies, or SSO callbacks.
 
@@ -21,32 +21,39 @@ SaintBridge follows a read-only-first release plan:
 | `v0.2`  | LMS courses, announcements, assignments, and unified task APIs                          |
 | `v0.3`  | Library search, seats, hours, loans, and unified today, notification, and calendar APIs |
 
+These releases describe implementation order, not a permanent feature ceiling. The long-term goal is comprehensive typed access to information that the authenticated user can normally view in u-SAINT, LMS, and Library services, including grades, attendance, progress, graduation data, and personal library status.
+
 Application, submission, modification, attendance manipulation, reservation, payment, and protected-content proxy features are explicitly out of scope for the initial releases.
 
 ## Authentication Model
 
-SaintBridge does not accept a student ID or password through its API. Authentication is performed by the user directly on the official sign-in page inside an isolated, visible, managed browser context.
+SaintBridge does not accept a student ID or password through its API. Authentication is performed by the user directly on the relevant official sign-in page inside an isolated, visible, managed browser context.
 
 ```text
-SignedOut
-  ↓ user signs in on the official page
-IdentityAuthenticated
-  ├─→ u-SAINT session: Ready / Expired / Unsupported
-  ├─→ LMS session: Ready / Expired / Unsupported
-  └─→ Library session: Ready / Expired / Limited / Unsupported
+Authentication sources
+  ├─→ SmartID SSO
+  │     ├─→ u-SAINT provider session
+  │     ├─→ LMS provider session
+  │     └─→ Library delegated session, when supported
+  └─→ Library Login
+        └─→ Library personal session
+
+Library public access
+  └─→ catalog, seats, hours, and other public capabilities
 ```
 
-Each provider receives an independent cookie jar and lifecycle. A failure or expiration in one provider must not damage another provider's session.
+Each authentication source and provider receives an independent lifecycle and cookie boundary. A failure or expiration in SmartID, Library authentication, or one provider must not damage unrelated sessions.
 
 ## Current Status
 
-SaintBridge is in pre-`v0.1` development. The multi-provider package graph, shared provider contracts, credential-free mock matrix, and provider-isolated HTTP session registry are in place. The next milestone begins with **M2 Auth Orchestrator (`AUTH-01` through `AUTH-08`)**.
+SaintBridge is in pre-`v0.1` development. The multi-provider package graph, separate SmartID and Library authentication contracts, credential-free mock matrix, and provider-isolated HTTP session registry are in place. The next milestone begins with **M2 Auth Orchestrator (`AUTH-01` through `AUTH-08`)**.
 
 The project cannot yet be used to sign in to school services or retrieve academic information.
 
 ## Design Principles
 
-- **One login, multiple providers:** Create and manage separate u-SAINT, LMS, and Library sessions from the SmartID identity flow.
+- **Official interactive authentication:** Support SmartID SSO and Library login without accepting credentials through the SaintBridge API.
+- **Comprehensive read APIs:** Make provider information easy to reuse through typed, provider-specific APIs before adding higher-level unified views.
 - **Normalized contracts:** Return stable public models instead of provider-specific screen and control identifiers.
 - **Local-first security:** Keep credentials and student data on the user's device by default.
 - **Read-only first:** Prioritize safe information retrieval over actions that change school data.
@@ -73,7 +80,7 @@ mock → auth, types
 | `auth`      | Managed browser login and provider session orchestration            |
 | `usaint`    | SAP portal, Web Dynpro, and academic adapters                       |
 | `lms`       | LearningX course, announcement, and assignment adapters             |
-| `library`   | Public catalog and delegated personal library adapters              |
+| `library`   | Public, SmartID-delegated, and Library-authenticated adapters       |
 | `facade`    | Unified Node.js developer API                                       |
 | `server`    | Local REST API, session management, and OpenAPI                     |
 | `client`    | Type-safe REST client and React integration                         |
@@ -100,6 +107,7 @@ pnpm verify
 - Never commit real passwords, cookies, SSO tokens, student HTML/XML, screenshots, session dumps, or raw HAR files.
 - Do not bypass multi-factor authentication, CAPTCHA, account locks, rate limits, or other access controls.
 - Do not read cookies from the user's existing system browser profile.
+- Accept credentials only through the relevant official page in the managed browser, never through the SaintBridge API surface.
 - Keep provider cookie jars separate and treat every session token as a credential.
 - Do not log request or response bodies containing credentials or personal information.
 - Do not operate a project-controlled centralized login proxy or retain student academic data on a project-controlled server.

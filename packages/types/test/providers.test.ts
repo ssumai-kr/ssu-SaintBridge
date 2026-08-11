@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   authSnapshotSchema,
+  browserLoginRequestSchema,
   isSensitiveScope,
   providerDescriptorSchema,
   providerForScope,
@@ -10,6 +11,17 @@ import {
 } from "../src/index.js";
 
 describe("provider contracts", () => {
+  it("rejects credentials and unknown fields in browser login requests", () => {
+    expect(
+      browserLoginRequestSchema.safeParse({
+        authSource: "smartid",
+        scopes: ["usaint:profile.read"],
+        studentId: "not-accepted",
+        password: "not-accepted",
+      }).success,
+    ).toBe(false);
+  });
+
   it("maps scopes to providers and marks sensitive scopes", () => {
     expect(providerForScope("usaint:timetable.read")).toBe("usaint");
     expect(providerForScope("lms:tasks.read")).toBe("lms");
@@ -21,6 +33,7 @@ describe("provider contracts", () => {
     expect(
       providerSessionSchema.parse({
         provider: "lms",
+        authenticatedBy: "smartid",
         status: "ready",
         grantedScopes: ["lms:courses.read", "lms:tasks.read"],
         capabilities: [
@@ -36,6 +49,7 @@ describe("provider contracts", () => {
     expect(
       providerSessionSchema.safeParse({
         provider: "usaint",
+        authenticatedBy: "smartid",
         status: "ready",
         grantedScopes: ["lms:courses.read"],
         capabilities: [{ id: "courses.read", available: true }],
@@ -46,6 +60,7 @@ describe("provider contracts", () => {
     expect(
       providerSessionSchema.safeParse({
         provider: "library",
+        authenticatedBy: "library",
         status: "limited",
         grantedScopes: ["library:catalog.read"],
         capabilities: [{ id: "catalog.read", available: true }],
@@ -57,6 +72,7 @@ describe("provider contracts", () => {
   it("rejects duplicate providers in an auth snapshot", () => {
     const session = {
       provider: "library",
+      authenticatedBy: "public",
       status: "unsupported",
       grantedScopes: [],
       capabilities: [{ id: "catalog.read", available: false }],
@@ -64,8 +80,70 @@ describe("provider contracts", () => {
     };
     expect(
       authSnapshotSchema.safeParse({
-        state: "identity-authenticated",
+        state: "open",
+        authSources: [],
         providers: [session, session],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("separates authentication sources from data providers", () => {
+    expect(
+      authSnapshotSchema
+        .parse({
+          state: "open",
+          authSources: [
+            { source: "smartid", status: "authenticated", expiresAt: null },
+            { source: "library", status: "authenticated", expiresAt: null },
+          ],
+          providers: [
+            {
+              provider: "usaint",
+              authenticatedBy: "smartid",
+              status: "ready",
+              grantedScopes: ["usaint:profile.read"],
+              capabilities: [{ id: "profile.read", available: true }],
+              expiresAt: null,
+            },
+            {
+              provider: "library",
+              authenticatedBy: "library",
+              status: "ready",
+              grantedScopes: ["library:loans.read"],
+              capabilities: [{ id: "loans.read", available: true }],
+              expiresAt: null,
+            },
+          ],
+        })
+        .providers.map(({ authenticatedBy }) => authenticatedBy),
+    ).toEqual(["smartid", "library"]);
+  });
+
+  it("rejects invalid authentication-to-provider bindings", () => {
+    expect(
+      providerSessionSchema.safeParse({
+        provider: "lms",
+        authenticatedBy: "library",
+        status: "ready",
+        grantedScopes: ["lms:courses.read"],
+        capabilities: [{ id: "courses.read", available: true }],
+        expiresAt: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      authSnapshotSchema.safeParse({
+        state: "open",
+        authSources: [{ source: "smartid", status: "expired", expiresAt: null }],
+        providers: [
+          {
+            provider: "usaint",
+            authenticatedBy: "smartid",
+            status: "ready",
+            grantedScopes: ["usaint:profile.read"],
+            capabilities: [{ id: "profile.read", available: true }],
+            expiresAt: null,
+          },
+        ],
       }).success,
     ).toBe(false);
   });
@@ -94,6 +172,8 @@ describe("provider contracts", () => {
     expect(
       providerDescriptorSchema.safeParse({
         provider: "library",
+        supportedAuthSources: ["smartid", "library"],
+        supportsPublicAccess: true,
         supportedScopes: ["usaint:profile.read"],
         capabilities: ["catalog.read"],
       }).success,

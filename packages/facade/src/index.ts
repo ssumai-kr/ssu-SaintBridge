@@ -12,4 +12,4 @@ export interface SaintBridgeAdapterRegistry {
 }
 
 export const createInitialBridgeStatus = (): AuthSnapshot =>
-  authSnapshotSchema.parse({ state: "signed-out", providers: [] });
+  authSnapshotSchema.parse({ state: "open", authSources: [], providers: [] });

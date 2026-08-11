@@ -4,13 +4,30 @@ export const providerIds = ["usaint", "lms", "library"] as const;
 export const providerIdSchema = z.enum(providerIds);
 export type ProviderId = z.infer<typeof providerIdSchema>;
 
+export const authSourceIds = ["smartid", "library"] as const;
+export const authSourceIdSchema = z.enum(authSourceIds);
+export type AuthSourceId = z.infer<typeof authSourceIdSchema>;
+
+export const providerAuthenticationSources = ["public", ...authSourceIds] as const;
+export const providerAuthenticationSourceSchema = z.enum(providerAuthenticationSources);
+export type ProviderAuthenticationSource = z.infer<typeof providerAuthenticationSourceSchema>;
+
 export const providerStatuses = ["ready", "expired", "limited", "unsupported"] as const;
 export const providerStatusSchema = z.enum(providerStatuses);
 export type ProviderStatus = z.infer<typeof providerStatusSchema>;
 
-export const identityStates = ["signed-out", "identity-authenticated", "closed"] as const;
-export const identityStateSchema = z.enum(identityStates);
-export type IdentityState = z.infer<typeof identityStateSchema>;
+export const authSourceStatuses = [
+  "authenticating",
+  "authenticated",
+  "expired",
+  "unsupported",
+] as const;
+export const authSourceStatusSchema = z.enum(authSourceStatuses);
+export type AuthSourceStatus = z.infer<typeof authSourceStatusSchema>;
+
+export const authLifecycleStates = ["open", "closed"] as const;
+export const authLifecycleStateSchema = z.enum(authLifecycleStates);
+export type AuthLifecycleState = z.infer<typeof authLifecycleStateSchema>;
 
 export const scopes = [
   "usaint:profile.read",
@@ -47,6 +64,29 @@ export const providerForScope = (scope: Scope): ProviderId =>
 
 export const isSensitiveScope = (scope: Scope): boolean => sensitiveScopeSet.has(scope);
 
+export const browserLoginRequestSchema = z
+  .object({
+    authSource: authSourceIdSchema,
+    scopes: z.array(scopeSchema).readonly(),
+  })
+  .strict()
+  .superRefine((request, context) => {
+    if (new Set(request.scopes).size !== request.scopes.length) {
+      context.addIssue({ code: "custom", message: "Requested scopes must be unique." });
+    }
+    if (
+      request.authSource === "library" &&
+      request.scopes.some((scope) => providerForScope(scope) !== "library")
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Library authentication can only request library scopes.",
+      });
+    }
+  })
+  .readonly();
+export type BrowserLoginRequest = z.infer<typeof browserLoginRequestSchema>;
+
 export const providerCapabilityIdSchema = z
   .string()
   .trim()
@@ -69,6 +109,7 @@ const isoTimestampSchema = z.string().datetime({ offset: true });
 export const providerSessionSchema = z
   .object({
     provider: providerIdSchema,
+    authenticatedBy: providerAuthenticationSourceSchema,
     status: providerStatusSchema,
     grantedScopes: z.array(scopeSchema).readonly(),
     capabilities: z.array(providerCapabilitySchema).readonly(),
@@ -84,6 +125,18 @@ export const providerSessionSchema = z
       context.addIssue({
         code: "custom",
         message: "Provider session scopes must belong to the same provider.",
+      });
+    }
+    if (session.authenticatedBy === "public" && session.provider !== "library") {
+      context.addIssue({
+        code: "custom",
+        message: "Only the library provider supports unauthenticated public sessions.",
+      });
+    }
+    if (session.authenticatedBy === "library" && session.provider !== "library") {
+      context.addIssue({
+        code: "custom",
+        message: "Library authentication can only create library provider sessions.",
       });
     }
 
@@ -114,22 +167,57 @@ export const providerSessionSchema = z
   .readonly();
 export type ProviderSession = z.infer<typeof providerSessionSchema>;
 
+export const authSourceSessionSchema = z
+  .object({
+    source: authSourceIdSchema,
+    status: authSourceStatusSchema,
+    expiresAt: isoTimestampSchema.nullable(),
+  })
+  .strict()
+  .readonly();
+export type AuthSourceSession = z.infer<typeof authSourceSessionSchema>;
+
 export const authSnapshotSchema = z
   .object({
-    state: identityStateSchema,
+    state: authLifecycleStateSchema,
+    authSources: z.array(authSourceSessionSchema).readonly(),
     providers: z.array(providerSessionSchema).readonly(),
   })
   .strict()
   .superRefine((snapshot, context) => {
+    const authSources = snapshot.authSources.map(({ source }) => source);
+    if (new Set(authSources).size !== authSources.length) {
+      context.addIssue({ code: "custom", message: "Authentication sources must be unique." });
+    }
     const providers = snapshot.providers.map(({ provider }) => provider);
     if (new Set(providers).size !== providers.length) {
       context.addIssue({ code: "custom", message: "Provider sessions must be unique." });
     }
-    if (snapshot.state !== "identity-authenticated" && snapshot.providers.length > 0) {
+    if (snapshot.state === "closed" && (snapshot.authSources.length > 0 || providers.length > 0)) {
       context.addIssue({
         code: "custom",
-        message: "Only an authenticated identity can expose provider sessions.",
+        message: "A closed authentication lifecycle cannot expose active state.",
       });
+    }
+    for (const provider of snapshot.providers) {
+      if (provider.authenticatedBy === "public") continue;
+      const authSource = snapshot.authSources.find(
+        ({ source }) => source === provider.authenticatedBy,
+      );
+      if (authSource === undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "An authenticated provider must reference an authentication source.",
+        });
+      } else if (
+        (provider.status === "ready" || provider.status === "limited") &&
+        authSource.status !== "authenticated"
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "A ready provider requires an authenticated source.",
+        });
+      }
     }
   })
   .readonly();
@@ -168,6 +256,8 @@ export type SourceRef = z.infer<typeof sourceRefSchema>;
 export const providerDescriptorSchema = z
   .object({
     provider: providerIdSchema,
+    supportedAuthSources: z.array(authSourceIdSchema).readonly(),
+    supportsPublicAccess: z.boolean(),
     supportedScopes: z.array(scopeSchema).readonly(),
     capabilities: z.array(providerCapabilityIdSchema).readonly(),
   })
@@ -177,6 +267,18 @@ export const providerDescriptorSchema = z
       descriptor.supportedScopes.some((scope) => providerForScope(scope) !== descriptor.provider)
     ) {
       context.addIssue({ code: "custom", message: "Descriptor scopes must match its provider." });
+    }
+    if (
+      descriptor.provider !== "library" &&
+      (descriptor.supportsPublicAccess || descriptor.supportedAuthSources.includes("library"))
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Only the library provider supports public or library-native authentication.",
+      });
+    }
+    if (new Set(descriptor.supportedAuthSources).size !== descriptor.supportedAuthSources.length) {
+      context.addIssue({ code: "custom", message: "Descriptor auth sources must be unique." });
     }
     if (new Set(descriptor.supportedScopes).size !== descriptor.supportedScopes.length) {
       context.addIssue({ code: "custom", message: "Descriptor scopes must be unique." });

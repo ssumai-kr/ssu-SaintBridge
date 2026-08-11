@@ -3,6 +3,8 @@ import { providerDescriptorSchema } from "@ssu-saintbridge/types";
 
 export const lmsProviderDescriptor = providerDescriptorSchema.parse({
   provider: "lms",
+  supportedAuthSources: ["smartid"],
+  supportsPublicAccess: false,
   supportedScopes: [
     "lms:courses.read",
     "lms:tasks.read",
