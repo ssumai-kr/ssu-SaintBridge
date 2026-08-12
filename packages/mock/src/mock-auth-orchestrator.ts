@@ -1,7 +1,7 @@
 import {
-  parseAuthLoginRequest,
-  TransientCredentials,
+  AuthenticationExecutor,
   type AuthLoginRequest,
+  type AuthenticationExecutionContext,
   type AuthOrchestrator,
 } from "@ssu-saintbridge/auth";
 import {
@@ -12,6 +12,7 @@ import {
   providerSessionSchema,
   scopeSchema,
   type AuthSnapshot,
+  type AuthInputMode,
   type AuthSourceId,
   type ProviderAuthenticationSource,
   type ProviderId,
@@ -37,6 +38,27 @@ export const mockAllProviderScopes = [
 ] as const satisfies readonly Scope[];
 
 const publicLibraryScopeSet = new Set<Scope>(mockPublicLibraryScopes);
+
+interface MockAuthenticationExecution {
+  readonly authSource: AuthSourceId;
+  readonly inputMode: AuthInputMode;
+  readonly requestedScopes: readonly Scope[];
+}
+
+const completeMockAuthentication = (
+  context: AuthenticationExecutionContext,
+): Readonly<MockAuthenticationExecution> =>
+  Object.freeze({
+    authSource: context.authSource,
+    inputMode: context.inputMode,
+    requestedScopes: context.requestedScopes,
+  });
+
+const createMockAuthenticationExecutor = (): AuthenticationExecutor<MockAuthenticationExecution> =>
+  new AuthenticationExecutor({
+    officialBrowser: async (context) => completeMockAuthentication(context),
+    applicationCredentials: async (context) => completeMockAuthentication(context),
+  });
 
 const capabilityForScope = (scope: Scope): string => scope.slice(scope.indexOf(":") + 1);
 
@@ -83,6 +105,7 @@ const createProviderSessions = (
 
 export class MockAuthOrchestrator implements AuthOrchestrator {
   readonly userKey: MockUserKey;
+  readonly #authenticationExecutor = createMockAuthenticationExecutor();
   #snapshot: AuthSnapshot = authSnapshotSchema.parse({
     state: "open",
     authSources: [],
@@ -95,16 +118,9 @@ export class MockAuthOrchestrator implements AuthOrchestrator {
 
   async login(request: AuthLoginRequest): Promise<AuthSnapshot> {
     this.#assertOpen();
-    const parsedRequest = parseAuthLoginRequest(request);
-    if (parsedRequest.mode === "application-credentials") {
-      const credentials = await parsedRequest.acquireCredentials();
-      if (!(credentials instanceof TransientCredentials)) {
-        throw new TypeError("The credential provider must return TransientCredentials.");
-      }
-      await credentials.withCredentials(async () => undefined);
-    }
-    const authSource = parsedRequest.authSource;
-    const scopes = parsedRequest.scopes;
+    const execution = await this.#authenticationExecutor.execute(request);
+    const authSource = execution.authSource;
+    const scopes = execution.requestedScopes;
 
     const openedProviders = createProviderSessions(authSource, scopes);
     const openedProviderIds = new Set(openedProviders.map(({ provider }) => provider));
@@ -114,7 +130,7 @@ export class MockAuthOrchestrator implements AuthOrchestrator {
         ...this.#snapshot.authSources.filter(({ source }) => source !== authSource),
         {
           source: authSource,
-          inputMode: parsedRequest.mode,
+          inputMode: execution.inputMode,
           status: "authenticated",
           expiresAt: null,
         },
