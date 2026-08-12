@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   AuthenticationExecutor,
+  AuthenticationExecutionError,
   TransientCredentials,
+  maximumAuthenticationExecutionTimeoutMs,
   type AuthenticationExecutionHandlers,
 } from "../src/index.js";
 
@@ -158,7 +160,125 @@ describe("authentication executor", () => {
         },
         { signal: controller.signal },
       ),
-    ).rejects.toThrow("cancelled before execution");
+    ).rejects.toMatchObject({
+      authSource: "smartid",
+      inputMode: "application-credentials",
+      violation: "CANCELLED",
+    });
     expect(acquireCredentials).not.toHaveBeenCalled();
   });
+
+  it("signals a safe timeout to an official browser handler", async () => {
+    const executor = new AuthenticationExecutor({
+      officialBrowser: ({ signal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+      applicationCredentials: async () => "unused",
+    });
+
+    const execution = executor.execute(
+      { authSource: "smartid", mode: "official-browser", scopes: [] },
+      { timeoutMs: 5 },
+    );
+
+    await expect(execution).rejects.toMatchObject({
+      authSource: "smartid",
+      inputMode: "official-browser",
+      violation: "TIMED_OUT",
+    });
+  });
+
+  it("releases credentials after a credential handler observes timeout", async () => {
+    const credentials = new TransientCredentials({
+      identifier: "student-id",
+      password: "temporary-password",
+    });
+    const executor = new AuthenticationExecutor({
+      officialBrowser: async () => "unused",
+      applicationCredentials: ({ signal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    });
+
+    await expect(
+      executor.execute(
+        {
+          authSource: "smartid",
+          mode: "application-credentials",
+          scopes: [],
+          acquireCredentials: () => credentials,
+        },
+        { timeoutMs: 5 },
+      ),
+    ).rejects.toMatchObject({ violation: "TIMED_OUT" });
+    expect(credentials.released).toBe(true);
+  });
+
+  it("times out credential acquisition and releases credentials that arrive late", async () => {
+    const credentials = new TransientCredentials({
+      identifier: "student-id",
+      password: "temporary-password",
+    });
+    const acquisition = Promise.withResolvers<TransientCredentials>();
+    const handlers = createHandlers();
+    const executor = new AuthenticationExecutor(handlers);
+
+    const running = executor.execute(
+      {
+        authSource: "smartid",
+        mode: "application-credentials",
+        scopes: [],
+        acquireCredentials: () => acquisition.promise,
+      },
+      { timeoutMs: 5 },
+    );
+
+    await expect(running).rejects.toMatchObject({ violation: "TIMED_OUT" });
+    acquisition.resolve(credentials);
+    await acquisition.promise;
+    await Promise.resolve();
+    expect(credentials.released).toBe(true);
+    expect(handlers.applicationCredentials).not.toHaveBeenCalled();
+  });
+
+  it("does not serialize a caller-provided cancellation reason", async () => {
+    const controller = new AbortController();
+    const secret = ["do", "not", "serialize"].join("-");
+    controller.abort(new Error(secret));
+    const executor = new AuthenticationExecutor(createHandlers());
+
+    let caught: unknown;
+    try {
+      await executor.execute(
+        { authSource: "library", mode: "official-browser", scopes: [] },
+        { signal: controller.signal },
+      );
+    } catch (error: unknown) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(AuthenticationExecutionError);
+    expect(JSON.stringify(caught)).toBe(
+      '{"name":"AuthenticationExecutionError","authSource":"library","inputMode":"official-browser","violation":"CANCELLED"}',
+    );
+    expect(JSON.stringify(caught)).not.toContain(secret);
+  });
+
+  it.each([0, 1.5, maximumAuthenticationExecutionTimeoutMs + 1])(
+    "rejects an unsafe authentication timeout: %s",
+    async (timeoutMs) => {
+      const handlers = createHandlers();
+      const executor = new AuthenticationExecutor(handlers);
+
+      await expect(
+        executor.execute(
+          { authSource: "smartid", mode: "official-browser", scopes: [] },
+          { timeoutMs },
+        ),
+      ).rejects.toBeInstanceOf(RangeError);
+      expect(handlers.officialBrowser).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -2,6 +2,7 @@ import type { Browser, BrowserContext, Download, Frame, Page, Request, Route } f
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  AuthenticationExecutor,
   BrowserNavigationPolicyError,
   BrowserNavigationPolicyRegistry,
   ManagedBrowserError,
@@ -240,8 +241,121 @@ describe("managed browser runner", () => {
 
     await expect(
       runner.run(execution("smartid", controller.signal), async () => "unused"),
-    ).rejects.toThrow("cancelled before launch");
+    ).rejects.toMatchObject({ authSource: "smartid", violation: "EXECUTION_ABORTED" });
     expect(harness.launchMock).not.toHaveBeenCalled();
+  });
+
+  it("closes browser resources when execution is cancelled during a task", async () => {
+    const harness = createBrowserHarness();
+    const runner = new ManagedBrowserRunner({
+      navigationPolicies: policies,
+      launchBrowser: harness.launchBrowser,
+    });
+    const controller = new AbortController();
+    const taskStarted = Promise.withResolvers<void>();
+
+    const running = runner.run(execution("smartid", controller.signal), async () => {
+      taskStarted.resolve();
+      return new Promise<never>(() => undefined);
+    });
+    await taskStarted.promise;
+    controller.abort(new Error("private cancellation detail"));
+
+    await expect(running).rejects.toMatchObject({
+      authSource: "smartid",
+      violation: "EXECUTION_ABORTED",
+    });
+    expect(harness.contextClose).toHaveBeenCalledOnce();
+    expect(harness.browserClose).toHaveBeenCalledOnce();
+  });
+
+  it("connects executor timeout to browser cleanup without changing the timeout error", async () => {
+    const harness = createBrowserHarness();
+    const runner = new ManagedBrowserRunner({
+      navigationPolicies: policies,
+      launchBrowser: harness.launchBrowser,
+    });
+    const executor = new AuthenticationExecutor({
+      officialBrowser: (context) =>
+        runner.run(context, async () => new Promise<never>(() => undefined)),
+      applicationCredentials: async () => "unused",
+    });
+
+    await expect(
+      executor.execute(
+        { authSource: "smartid", mode: "official-browser", scopes: [] },
+        { timeoutMs: 5 },
+      ),
+    ).rejects.toMatchObject({
+      authSource: "smartid",
+      inputMode: "official-browser",
+      violation: "TIMED_OUT",
+    });
+    expect(harness.contextClose).toHaveBeenCalledOnce();
+    expect(harness.browserClose).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the task failure when both cleanup operations fail", async () => {
+    const harness = createBrowserHarness();
+    harness.contextClose.mockRejectedValueOnce(new Error("context cleanup failed"));
+    harness.browserClose.mockRejectedValueOnce(new Error("browser cleanup failed"));
+    const runner = new ManagedBrowserRunner({
+      navigationPolicies: policies,
+      launchBrowser: harness.launchBrowser,
+    });
+
+    await expect(
+      runner.run(execution(), async () => {
+        throw new Error("original adapter failure");
+      }),
+    ).rejects.toThrow("original adapter failure");
+    expect(harness.contextClose).toHaveBeenCalledOnce();
+    expect(harness.browserClose).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces cleanup failure after an otherwise successful task", async () => {
+    const harness = createBrowserHarness();
+    harness.contextClose.mockRejectedValueOnce(new Error("context cleanup failed"));
+    const runner = new ManagedBrowserRunner({
+      navigationPolicies: policies,
+      launchBrowser: harness.launchBrowser,
+    });
+
+    await expect(runner.run(execution(), async () => "completed")).rejects.toThrow(
+      "context cleanup failed",
+    );
+    expect(harness.browserClose).toHaveBeenCalledOnce();
+  });
+
+  it("idempotently closes active executions and rejects future runs", async () => {
+    const harness = createBrowserHarness();
+    const runner = new ManagedBrowserRunner({
+      navigationPolicies: policies,
+      launchBrowser: harness.launchBrowser,
+    });
+    const taskStarted = Promise.withResolvers<void>();
+    const running = runner.run(execution("library"), async () => {
+      taskStarted.resolve();
+      return new Promise<never>(() => undefined);
+    });
+    await taskStarted.promise;
+
+    const firstClose = runner.close();
+    const secondClose = runner.close();
+    expect(secondClose).toBe(firstClose);
+    await Promise.all([firstClose, secondClose]);
+
+    await expect(running).rejects.toMatchObject({
+      authSource: "library",
+      violation: "RUNNER_CLOSED",
+    });
+    expect(harness.contextClose).toHaveBeenCalledOnce();
+    expect(harness.browserClose).toHaveBeenCalledOnce();
+    await expect(runner.run(execution("smartid"), async () => "unused")).rejects.toMatchObject({
+      authSource: "smartid",
+      violation: "RUNNER_CLOSED",
+    });
+    expect(harness.launchMock).toHaveBeenCalledOnce();
   });
 
   it("keeps policy and browser errors free of navigated URLs", () => {
