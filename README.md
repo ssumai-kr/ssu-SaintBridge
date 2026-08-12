@@ -51,9 +51,11 @@ Each authentication source and provider receives an independent lifecycle and co
 
 ## Current Status
 
-SaintBridge is in pre-`v0.1` development. The multi-provider package graph, separate SmartID and Library authentication contracts, dual input-mode request boundary, credential-redacting one-shot container, mock matrix, and provider-isolated HTTP session registry are in place. The next milestone begins with **M2 Auth Orchestrator (`AUTH-01` through `AUTH-08`)**.
+SaintBridge is in pre-`v0.1` development. **AUTH-01 is complete:** the project has a common dual-input executor, one-shot credential lifecycle, source-specific navigation policies, an isolated visible Playwright runner, deterministic timeout/cancellation cleanup, and executor-backed mocks. The next task is **AUTH-02, the dual-auth source state machine**.
 
 The project cannot yet be used to sign in to school services or retrieve academic information.
+
+See [Authentication](docs/authentication.md) for the implemented boundary and the remaining live-login work.
 
 ## Design Principles
 
@@ -104,6 +106,12 @@ Requirements:
 corepack enable
 pnpm install --frozen-lockfile
 pnpm verify
+```
+
+Unit tests use browser doubles. Install the Chromium binary only when running a manual visible-browser smoke test:
+
+```bash
+pnpm --filter @ssu-saintbridge/auth exec playwright install chromium
 ```
 
 ## Safety and Privacy

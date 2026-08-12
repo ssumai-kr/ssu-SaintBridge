@@ -26,6 +26,34 @@ const loginAllProviders = async (
 };
 
 describe("mock auth matrix", () => {
+  it.each([
+    ["smartid", "official-browser", mockSmartIdScopes],
+    ["smartid", "application-credentials", mockSmartIdScopes],
+    ["library", "official-browser", mockLibraryScopes],
+    ["library", "application-credentials", mockLibraryScopes],
+  ] as const)("executes %s authentication through %s", async (authSource, mode, scopes) => {
+    const auth = createMockAuthMatrix()["mock-user-a"];
+    const credentials = new TransientCredentials({
+      identifier: "mock-user",
+      password: "mock-password",
+    });
+
+    const snapshot = await (mode === "official-browser"
+      ? auth.login({ authSource, mode, scopes })
+      : auth.login({
+          authSource,
+          mode,
+          scopes,
+          acquireCredentials: () => credentials,
+        }));
+
+    expect(snapshot.authSources).toEqual([
+      expect.objectContaining({ source: authSource, inputMode: mode, status: "authenticated" }),
+    ]);
+    expect(snapshot.providers).not.toHaveLength(0);
+    expect(credentials.released).toBe(mode === "application-credentials");
+  });
+
   it("represents two users, two auth sources, and three provider sessions", async () => {
     const matrix = createMockAuthMatrix();
     await Promise.all(Object.values(matrix).map(loginAllProviders));
