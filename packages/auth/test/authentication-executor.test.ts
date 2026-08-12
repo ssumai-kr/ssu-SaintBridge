@@ -216,6 +216,30 @@ describe("authentication executor", () => {
     expect(credentials.released).toBe(true);
   });
 
+  it("enforces timeout even when the credential handler ignores cancellation", async () => {
+    const credentials = new TransientCredentials({
+      identifier: "student-id",
+      password: "temporary-password",
+    });
+    const executor = new AuthenticationExecutor({
+      officialBrowser: async () => "unused",
+      applicationCredentials: async () => new Promise<never>(() => undefined),
+    });
+
+    await expect(
+      executor.execute(
+        {
+          authSource: "smartid",
+          mode: "application-credentials",
+          scopes: [],
+          acquireCredentials: () => credentials,
+        },
+        { timeoutMs: 5 },
+      ),
+    ).rejects.toMatchObject({ violation: "TIMED_OUT" });
+    expect(credentials.released).toBe(true);
+  });
+
   it("times out credential acquisition and releases credentials that arrive late", async () => {
     const credentials = new TransientCredentials({
       identifier: "student-id",

@@ -83,6 +83,11 @@ interface AuthenticationExecutionLifecycle {
   dispose(): void;
 }
 
+interface AbortWaiter {
+  readonly promise: Promise<never>;
+  dispose(): void;
+}
+
 const parseTimeoutMs = (timeoutMs: number | undefined): number => {
   const parsedTimeout = timeoutMs ?? defaultAuthenticationExecutionTimeoutMs;
   if (
@@ -128,28 +133,36 @@ const createExecutionLifecycle = (
   };
 };
 
+const createAbortWaiter = (signal: AbortSignal): AbortWaiter => {
+  let rejectPromise: (error: unknown) => void = () => undefined;
+  const promise = new Promise<never>((_resolve, reject) => {
+    rejectPromise = reject;
+  });
+  const abort = (): void => rejectPromise(signal.reason);
+  if (signal.aborted) abort();
+  else signal.addEventListener("abort", abort, { once: true });
+  return {
+    promise,
+    dispose: () => signal.removeEventListener("abort", abort),
+  };
+};
+
 const acquireTransientCredentials = async (
   request: Extract<AuthLoginRequest, { readonly mode: "application-credentials" }>,
   signal: AbortSignal,
 ): Promise<TransientCredentials> => {
   const acquisition = Promise.resolve().then(() => request.acquireCredentials());
-  let rejectCancellation: (error: unknown) => void = () => undefined;
-  const cancellation = new Promise<never>((_resolve, reject) => {
-    rejectCancellation = reject;
-  });
-  const cancel = (): void => rejectCancellation(signal.reason);
-  if (signal.aborted) cancel();
-  else signal.addEventListener("abort", cancel, { once: true });
+  const abortWaiter = createAbortWaiter(signal);
 
   try {
-    return await Promise.race([acquisition, cancellation]);
+    return await Promise.race([acquisition, abortWaiter.promise]);
   } catch (error: unknown) {
     if (signal.aborted) {
       void acquisition.then((credentials) => credentials.release()).catch(() => undefined);
     }
     throw error;
   } finally {
-    signal.removeEventListener("abort", cancel);
+    abortWaiter.dispose();
   }
 };
 
@@ -204,9 +217,19 @@ export class AuthenticationExecutor<Result> {
       }
 
       const context = createContext(parsedRequest, signal);
-      return await credentials.withCredentials((values) =>
+      const abortWaiter = createAbortWaiter(signal);
+      const authentication = credentials.withCredentials((values) =>
         this.#handlers.applicationCredentials(context, values),
       );
+      try {
+        return await Promise.race([authentication, abortWaiter.promise]);
+      } finally {
+        if (signal.aborted) {
+          credentials.release();
+          void authentication.catch(() => undefined);
+        }
+        abortWaiter.dispose();
+      }
     } finally {
       lifecycle.dispose();
     }
