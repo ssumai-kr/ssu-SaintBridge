@@ -1,4 +1,5 @@
 export * from "./authentication-executor.js";
+export * from "./auth-source-state-machine.js";
 export * from "./browser-navigation-policy.js";
 export * from "./contracts.js";
 export * from "./managed-browser-runner.js";
