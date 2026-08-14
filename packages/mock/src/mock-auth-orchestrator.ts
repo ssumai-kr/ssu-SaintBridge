@@ -1,5 +1,7 @@
 import {
   AuthenticationExecutor,
+  StatefulAuthenticationExecutor,
+  parseAuthLoginRequest,
   type AuthLoginRequest,
   type AuthenticationExecutionContext,
   type AuthOrchestrator,
@@ -45,6 +47,12 @@ interface MockAuthenticationExecution {
   readonly requestedScopes: readonly Scope[];
 }
 
+export type MockAuthenticationHandler = (context: AuthenticationExecutionContext) => Promise<void>;
+
+export interface MockAuthOrchestratorOptions {
+  readonly authenticationHandler?: MockAuthenticationHandler;
+}
+
 const completeMockAuthentication = (
   context: AuthenticationExecutionContext,
 ): Readonly<MockAuthenticationExecution> =>
@@ -54,11 +62,23 @@ const completeMockAuthentication = (
     requestedScopes: context.requestedScopes,
   });
 
-const createMockAuthenticationExecutor = (): AuthenticationExecutor<MockAuthenticationExecution> =>
-  new AuthenticationExecutor({
-    officialBrowser: async (context) => completeMockAuthentication(context),
-    applicationCredentials: async (context) => completeMockAuthentication(context),
-  });
+const defaultMockAuthenticationHandler: MockAuthenticationHandler = async () => undefined;
+
+const createMockAuthenticationExecutor = (
+  authenticationHandler: MockAuthenticationHandler,
+): StatefulAuthenticationExecutor<MockAuthenticationExecution> =>
+  new StatefulAuthenticationExecutor(
+    new AuthenticationExecutor({
+      officialBrowser: async (context) => {
+        await authenticationHandler(context);
+        return completeMockAuthentication(context);
+      },
+      applicationCredentials: async (context) => {
+        await authenticationHandler(context);
+        return completeMockAuthentication(context);
+      },
+    }),
+  );
 
 const capabilityForScope = (scope: Scope): string => scope.slice(scope.indexOf(":") + 1);
 
@@ -105,58 +125,43 @@ const createProviderSessions = (
 
 export class MockAuthOrchestrator implements AuthOrchestrator {
   readonly userKey: MockUserKey;
-  readonly #authenticationExecutor = createMockAuthenticationExecutor();
-  #snapshot: AuthSnapshot = authSnapshotSchema.parse({
-    state: "open",
-    authSources: [],
-    providers: [],
-  });
+  readonly #authenticationExecutor: StatefulAuthenticationExecutor<MockAuthenticationExecution>;
+  #providers: readonly ProviderSession[] = Object.freeze([]);
+  #closed = false;
 
-  constructor(userKey: MockUserKey) {
+  constructor(userKey: MockUserKey, options: MockAuthOrchestratorOptions = {}) {
     this.userKey = userKey;
+    this.#authenticationExecutor = createMockAuthenticationExecutor(
+      options.authenticationHandler ?? defaultMockAuthenticationHandler,
+    );
   }
 
   async login(request: AuthLoginRequest): Promise<AuthSnapshot> {
     this.#assertOpen();
-    const execution = await this.#authenticationExecutor.execute(request);
+    const parsedRequest = parseAuthLoginRequest(request);
+    const openedProviders = createProviderSessions(parsedRequest.authSource, parsedRequest.scopes);
+    const execution = await this.#authenticationExecutor.execute(parsedRequest);
     const authSource = execution.authSource;
-    const scopes = execution.requestedScopes;
 
-    const openedProviders = createProviderSessions(authSource, scopes);
     const openedProviderIds = new Set(openedProviders.map(({ provider }) => provider));
-    this.#snapshot = authSnapshotSchema.parse({
-      state: "open",
-      authSources: [
-        ...this.#snapshot.authSources.filter(({ source }) => source !== authSource),
-        {
-          source: authSource,
-          inputMode: execution.inputMode,
-          status: "authenticated",
-          expiresAt: null,
-        },
-      ],
-      providers: [
-        ...this.#snapshot.providers.filter(
-          (session) =>
-            session.authenticatedBy !== authSource && !openedProviderIds.has(session.provider),
-        ),
-        ...openedProviders,
-      ],
-    });
-    return this.#snapshot;
+    this.#providers = Object.freeze([
+      ...this.#providers.filter(
+        (session) =>
+          session.authenticatedBy !== authSource && !openedProviderIds.has(session.provider),
+      ),
+      ...openedProviders,
+    ]);
+    return this.getSnapshot();
   }
 
   async logout(authSource: AuthSourceId): Promise<AuthSnapshot> {
     this.#assertOpen();
     const parsedSource = authSourceIdSchema.parse(authSource);
-    this.#snapshot = authSnapshotSchema.parse({
-      state: "open",
-      authSources: this.#snapshot.authSources.filter(({ source }) => source !== parsedSource),
-      providers: this.#snapshot.providers.filter(
-        ({ authenticatedBy }) => authenticatedBy !== parsedSource,
-      ),
-    });
-    return this.#snapshot;
+    this.#authenticationExecutor.remove(parsedSource);
+    this.#providers = Object.freeze(
+      this.#providers.filter(({ authenticatedBy }) => authenticatedBy !== parsedSource),
+    );
+    return this.getSnapshot();
   }
 
   openPublicLibrary(scopes: readonly Scope[]): AuthSnapshot {
@@ -166,45 +171,42 @@ export class MockAuthOrchestrator implements AuthOrchestrator {
     if (publicLibrary === undefined || publicLibrary.provider !== "library") {
       throw new TypeError("Public access requires at least one public library scope.");
     }
-    this.#snapshot = authSnapshotSchema.parse({
-      state: "open",
-      authSources: this.#snapshot.authSources,
-      providers: [
-        ...this.#snapshot.providers.filter(({ provider }) => provider !== "library"),
-        publicLibrary,
-      ],
-    });
-    return this.#snapshot;
+    this.#providers = Object.freeze([
+      ...this.#providers.filter(({ provider }) => provider !== "library"),
+      publicLibrary,
+    ]);
+    return this.getSnapshot();
   }
 
   getSnapshot(): AuthSnapshot {
-    return this.#snapshot;
+    if (this.#closed) {
+      return authSnapshotSchema.parse({ state: "closed", authSources: [], providers: [] });
+    }
+
+    const authSources = this.#authenticationExecutor.getSnapshot();
+    const authSourceById = new Map(authSources.map((source) => [source.source, source]));
+    const providers = this.#providers.flatMap((provider) => {
+      if (provider.authenticatedBy === "public") return [provider];
+      const authSource = authSourceById.get(provider.authenticatedBy);
+      if (authSource === undefined) return [];
+      if (authSource.status === "authenticated") return [provider];
+      return [providerSessionSchema.parse({ ...provider, status: "expired" })];
+    });
+
+    return authSnapshotSchema.parse({ state: "open", authSources, providers });
   }
 
   expireAuthSource(authSource: AuthSourceId): AuthSnapshot {
     this.#assertOpen();
     const parsedSource = authSourceIdSchema.parse(authSource);
-    if (!this.#snapshot.authSources.some(({ source }) => source === parsedSource)) {
-      throw new Error("The mock authentication source is not active.");
-    }
-    this.#snapshot = authSnapshotSchema.parse({
-      state: "open",
-      authSources: this.#snapshot.authSources.map((source) =>
-        source.source === parsedSource ? { ...source, status: "expired" } : source,
-      ),
-      providers: this.#snapshot.providers.map((provider) =>
-        provider.authenticatedBy === parsedSource
-          ? providerSessionSchema.parse({ ...provider, status: "expired" })
-          : provider,
-      ),
-    });
-    return this.#snapshot;
+    this.#authenticationExecutor.expire(parsedSource);
+    return this.getSnapshot();
   }
 
   expireProvider(provider: ProviderId): AuthSnapshot {
     this.#assertOpen();
     const parsedProvider = providerIdSchema.parse(provider);
-    const sessions = this.#snapshot.providers.map((session) =>
+    const sessions = this.#providers.map((session) =>
       session.provider === parsedProvider
         ? providerSessionSchema.parse({ ...session, status: "expired" })
         : session,
@@ -212,24 +214,21 @@ export class MockAuthOrchestrator implements AuthOrchestrator {
     if (!sessions.some((session) => session.provider === parsedProvider)) {
       throw new Error("The mock provider session is not active.");
     }
-    this.#snapshot = authSnapshotSchema.parse({
-      state: "open",
-      authSources: this.#snapshot.authSources,
-      providers: sessions,
-    });
-    return this.#snapshot;
+    this.#providers = Object.freeze(sessions);
+    return this.getSnapshot();
   }
 
   async close(): Promise<void> {
-    this.#snapshot = authSnapshotSchema.parse({
-      state: "closed",
-      authSources: [],
-      providers: [],
-    });
+    if (this.#closed) return;
+    for (const { source } of this.#authenticationExecutor.getSnapshot()) {
+      this.#authenticationExecutor.remove(source);
+    }
+    this.#providers = Object.freeze([]);
+    this.#closed = true;
   }
 
   #assertOpen(): void {
-    if (this.#snapshot.state === "closed") throw new Error("The mock auth session is closed.");
+    if (this.#closed) throw new Error("The mock auth session is closed.");
   }
 }
 

@@ -240,6 +240,77 @@ describe("stateful authentication executor", () => {
     expect(stateful.getSnapshot()).toEqual([]);
   });
 
+  it("keeps a replacement attempt when the removed attempt succeeds late", async () => {
+    const oldPending = Promise.withResolvers<string>();
+    const currentPending = Promise.withResolvers<string>();
+    const officialBrowser = vi
+      .fn<() => Promise<string>>()
+      .mockReturnValueOnce(oldPending.promise)
+      .mockReturnValueOnce(currentPending.promise);
+    const stateful = new StatefulAuthenticationExecutor(
+      new AuthenticationExecutor({
+        officialBrowser,
+        applicationCredentials: async () => "unused",
+      }),
+    );
+
+    const oldExecution = stateful.execute({
+      authSource: "smartid",
+      mode: "official-browser",
+      scopes: [],
+    });
+    stateful.remove("smartid");
+    const currentExecution = stateful.execute({
+      authSource: "smartid",
+      mode: "official-browser",
+      scopes: [],
+    });
+
+    oldPending.resolve("late success");
+    await expect(oldExecution).rejects.toMatchObject({ violation: "STALE_ATTEMPT" });
+    expect(stateful.getSnapshot()[0]).toMatchObject({ status: "authenticating" });
+
+    currentPending.resolve("current success");
+    await expect(currentExecution).resolves.toBe("current success");
+    expect(stateful.getSnapshot()[0]).toMatchObject({ status: "authenticated" });
+  });
+
+  it("keeps a replacement attempt when the removed attempt fails late", async () => {
+    const oldPending = Promise.withResolvers<string>();
+    const currentPending = Promise.withResolvers<string>();
+    const oldFailure = new Error("late failure from removed attempt");
+    const officialBrowser = vi
+      .fn<() => Promise<string>>()
+      .mockReturnValueOnce(oldPending.promise)
+      .mockReturnValueOnce(currentPending.promise);
+    const stateful = new StatefulAuthenticationExecutor(
+      new AuthenticationExecutor({
+        officialBrowser,
+        applicationCredentials: async () => "unused",
+      }),
+    );
+
+    const oldExecution = stateful.execute({
+      authSource: "library",
+      mode: "official-browser",
+      scopes: [],
+    });
+    stateful.remove("library");
+    const currentExecution = stateful.execute({
+      authSource: "library",
+      mode: "official-browser",
+      scopes: [],
+    });
+
+    oldPending.reject(oldFailure);
+    await expect(oldExecution).rejects.toBe(oldFailure);
+    expect(stateful.getSnapshot()[0]).toMatchObject({ status: "authenticating" });
+
+    currentPending.resolve("current success");
+    await expect(currentExecution).resolves.toBe("current success");
+    expect(stateful.getSnapshot()[0]).toMatchObject({ status: "authenticated" });
+  });
+
   it("delegates explicit expiration to the state machine", async () => {
     const stateful = new StatefulAuthenticationExecutor(
       new AuthenticationExecutor({

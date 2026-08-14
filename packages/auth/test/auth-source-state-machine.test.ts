@@ -177,6 +177,17 @@ describe("in-memory authentication source state machine", () => {
     expect(machine.getSnapshot()[0]).toMatchObject({ status: "authenticated" });
   });
 
+  it("does not allow a completed attempt to roll back its stable state", () => {
+    const machine = new InMemoryAuthSourceStateMachine();
+    const attempt = machine.begin({ source: "library", inputMode: "official-browser" });
+    const completed = machine.complete(attempt);
+
+    expect(() => machine.rollback(attempt)).toThrowError(
+      expect.objectContaining({ violation: "STALE_ATTEMPT" }),
+    );
+    expect(machine.getSnapshot()).toEqual([completed]);
+  });
+
   it("rejects attempts owned by another state machine", () => {
     const owner = new InMemoryAuthSourceStateMachine();
     const other = new InMemoryAuthSourceStateMachine();
