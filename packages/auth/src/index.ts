@@ -5,4 +5,5 @@ export * from "./contracts.js";
 export * from "./in-memory-auth-source-state-machine.js";
 export * from "./managed-browser-runner.js";
 export * from "./provider-http-sessions.js";
+export * from "./stateful-authentication-executor.js";
 export * from "./transient-credentials.js";
