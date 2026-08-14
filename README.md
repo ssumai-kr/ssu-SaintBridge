@@ -51,11 +51,11 @@ Each authentication source and provider receives an independent lifecycle and co
 
 ## Current Status
 
-SaintBridge is in pre-`v0.1` development. **AUTH-01 is complete:** the project has a common dual-input executor, one-shot credential lifecycle, source-specific navigation policies, an isolated visible Playwright runner, deterministic timeout/cancellation cleanup, and executor-backed mocks. The next task is **AUTH-02, the dual-auth source state machine**.
+SaintBridge is in pre-`v0.1` development. **AUTH-01 and AUTH-02 are complete:** the project has a common dual-input executor, one-shot credential lifecycle, source-specific navigation policies, an isolated visible Playwright runner, and an independent SmartID/Library state machine with deterministic rollback and stale-attempt protection. The mock orchestrator uses the same production state contract and supports controllable authentication tests. The next task is **AUTH-03, provider callback and session binding**.
 
 The project cannot yet be used to sign in to school services or retrieve academic information.
 
-See [Authentication](docs/authentication.md) for the implemented boundary and the remaining live-login work.
+See [Authentication](docs/authentication.md) for the implemented execution and state boundaries and the remaining live-login work.
 
 ## Design Principles
 

@@ -86,6 +86,30 @@ describe("stateful authentication executor", () => {
     expect(stateful.getSnapshot()).toEqual([]);
   });
 
+  it("does not mutate another source when authentication fails", async () => {
+    const smartIdFailure = new Error("SmartID authentication failed");
+    const stateful = new StatefulAuthenticationExecutor(
+      new AuthenticationExecutor({
+        officialBrowser: async ({ authSource }) => {
+          if (authSource === "smartid") throw smartIdFailure;
+          return "library authenticated";
+        },
+        applicationCredentials: async () => "unused",
+      }),
+    );
+    await stateful.execute({
+      authSource: "library",
+      mode: "official-browser",
+      scopes: [],
+    });
+    const library = stateful.getSnapshot()[0];
+
+    await expect(
+      stateful.execute({ authSource: "smartid", mode: "official-browser", scopes: [] }),
+    ).rejects.toBe(smartIdFailure);
+    expect(stateful.getSnapshot()).toEqual([library]);
+  });
+
   it("restores the previous authenticated state when reauthentication fails", async () => {
     const failure = new Error("reauthentication failed");
     const officialBrowser = vi

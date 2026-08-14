@@ -96,6 +96,27 @@ describe("in-memory authentication source state machine", () => {
     expect(machine.getSnapshot()).toEqual([previous]);
   });
 
+  it("restores an expired session when reauthentication rolls back", () => {
+    const machine = new InMemoryAuthSourceStateMachine();
+    const initial = machine.begin({ source: "library", inputMode: "official-browser" });
+    machine.complete(initial, { expiresAt: "2026-08-15T12:00:00+09:00" });
+    const expired = machine.expire("library");
+    const retry = machine.begin({
+      source: "library",
+      inputMode: "application-credentials",
+    });
+
+    expect(machine.rollback(retry)).toBe(expired);
+    expect(machine.getSnapshot()).toEqual([
+      {
+        source: "library",
+        inputMode: "official-browser",
+        status: "expired",
+        expiresAt: "2026-08-15T12:00:00+09:00",
+      },
+    ]);
+  });
+
   it("expires and then reauthenticates one source", () => {
     const machine = new InMemoryAuthSourceStateMachine();
     const initial = machine.begin({ source: "smartid", inputMode: "official-browser" });

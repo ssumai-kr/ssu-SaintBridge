@@ -2,7 +2,7 @@
 
 SaintBridge separates authentication sources, authentication input modes, and data-provider sessions.
 
-This document describes the authentication execution boundary completed in `AUTH-01`. It does not mean that live SmartID or Library sign-in is available yet. Source-specific success detection, callback processing, and provider-session creation begin in later AUTH tasks.
+This document describes the authentication execution boundary completed in `AUTH-01` and the independent SmartID/Library state lifecycle completed in `AUTH-02`. It does not mean that live SmartID or Library sign-in is available yet. Source-specific success detection, callback processing, and real provider-session creation begin in `AUTH-03` and later AUTH tasks.
 
 ## Model
 
@@ -24,7 +24,44 @@ Data providers remain separate from both concepts:
 
 An authentication snapshot records the source, input mode, status, and expiry. It never records an identifier or password.
 
+## Authentication source state machine
+
+SmartID and Library authentication are tracked independently. Absence from `authSources` represents a source that has no authentication state.
+
+| Current state    | Event    | Next state                           |
+| ---------------- | -------- | ------------------------------------ |
+| absent           | begin    | `authenticating`                     |
+| `authenticating` | complete | `authenticated`                      |
+| `authenticating` | rollback | the previous stable state, or absent |
+| `authenticated`  | begin    | `authenticating`                     |
+| `authenticated`  | expire   | `expired`                            |
+| `expired`        | begin    | `authenticating`                     |
+| any active state | remove   | absent                               |
+
+`unsupported` remains part of the shared public status model, but AUTH-02 does not produce it. Support and capability detection belong to AUTH-07.
+
+`InMemoryAuthSourceStateMachine` stores only schema-validated source metadata. `StatefulAuthenticationExecutor` composes that state machine with the AUTH-01 executor:
+
+```text
+validate AuthLoginRequest
+  -> begin opaque source attempt
+  -> expose authenticating snapshot
+  -> execute AUTH-01 input-mode handler
+       success -> complete -> authenticated
+       failure, cancellation, or timeout -> rollback
+```
+
+An initial failed attempt rolls back to absent. Failed reauthentication restores the complete previous `authenticated` or `expired` session, including its input mode and expiry metadata.
+
+SmartID and Library may authenticate concurrently, but only one attempt may own a given source. Attempt tokens are opaque and tracked by object identity. Completion or rollback from a removed, completed, or replaced attempt is rejected, so a late handler cannot overwrite a newer state. If rollback itself is stale, the original authentication error remains primary.
+
+Snapshots are frozen, deterministically ordered as SmartID then Library, and never contain credentials, credential callbacks, cookies, browser objects, or internal attempt ownership data.
+
+The mock orchestrator uses the same stateful executor. Tests may inject a non-sensitive `authenticationHandler` to pause, succeed, or fail authentication deterministically without a school account. During reauthentication, mock provider sessions derived from that source are exposed as expired until the attempt succeeds or rolls back.
+
 ## Execution flow
+
+The stateful executor surrounds the lower-level AUTH-01 execution boundary described below.
 
 ```text
 AuthLoginRequest
