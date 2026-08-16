@@ -157,7 +157,10 @@ export class MockAuthOrchestrator implements AuthOrchestrator {
   async logout(authSource: AuthSourceId): Promise<AuthSnapshot> {
     this.#assertOpen();
     const parsedSource = authSourceIdSchema.parse(authSource);
-    this.#authenticationExecutor.remove(parsedSource);
+    const sourceIsActive = this.#authenticationExecutor
+      .getSnapshot()
+      .some(({ source }) => source === parsedSource);
+    if (sourceIsActive) this.#authenticationExecutor.remove(parsedSource);
     this.#providers = Object.freeze(
       this.#providers.filter(({ authenticatedBy }) => authenticatedBy !== parsedSource),
     );

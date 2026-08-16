@@ -297,6 +297,21 @@ describe("mock auth matrix", () => {
     expect(snapshot.providers.map(({ provider }) => provider).sort()).toEqual(["lms", "usaint"]);
   });
 
+  it("treats logout for an absent source as an idempotent no-op", async () => {
+    const auth = createMockAuthMatrix()["mock-user-a"];
+    const publicSnapshot = auth.openPublicLibrary(mockPublicLibraryScopes);
+
+    await expect(auth.logout("library")).resolves.toEqual(publicSnapshot);
+
+    await auth.login({
+      authSource: "smartid",
+      mode: "official-browser",
+      scopes: mockSmartIdScopes,
+    });
+    const loggedOut = await auth.logout("smartid");
+    await expect(auth.logout("smartid")).resolves.toEqual(loggedOut);
+  });
+
   it("discards all auth and provider state on close", async () => {
     const auth = createMockAuthMatrix()["mock-user-a"];
     await loginAllProviders(auth);
