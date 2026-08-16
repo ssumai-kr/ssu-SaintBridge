@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TransientCredentials } from "@ssu-saintbridge/auth";
 
 import {
+  MockAuthOrchestrator,
   createMockAuthMatrix,
   mockLibraryScopes,
   mockPublicLibraryScopes,
@@ -26,6 +27,132 @@ const loginAllProviders = async (
 };
 
 describe("mock auth matrix", () => {
+  it("exposes a controllable authenticating state through the production state contract", async () => {
+    const gate = Promise.withResolvers<void>();
+    const authenticationHandler = vi.fn(() => gate.promise);
+    const auth = new MockAuthOrchestrator("mock-user-a", { authenticationHandler });
+
+    const login = auth.login({
+      authSource: "smartid",
+      mode: "official-browser",
+      scopes: mockSmartIdScopes,
+    });
+
+    expect(auth.getSnapshot()).toEqual({
+      state: "open",
+      authSources: [
+        {
+          source: "smartid",
+          inputMode: "official-browser",
+          status: "authenticating",
+          expiresAt: null,
+        },
+      ],
+      providers: [],
+    });
+    expect(authenticationHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authSource: "smartid",
+        inputMode: "official-browser",
+        requestedScopes: mockSmartIdScopes,
+      }),
+    );
+
+    gate.resolve();
+    await expect(login).resolves.toMatchObject({
+      authSources: [expect.objectContaining({ status: "authenticated" })],
+    });
+  });
+
+  it("rejects overlapping mock logins for the same source", async () => {
+    const gate = Promise.withResolvers<void>();
+    const auth = new MockAuthOrchestrator("mock-user-a", {
+      authenticationHandler: () => gate.promise,
+    });
+    const first = auth.login({
+      authSource: "library",
+      mode: "official-browser",
+      scopes: mockLibraryScopes,
+    });
+
+    await expect(
+      auth.login({
+        authSource: "library",
+        mode: "official-browser",
+        scopes: mockLibraryScopes,
+      }),
+    ).rejects.toMatchObject({ violation: "ATTEMPT_ALREADY_ACTIVE" });
+    expect(auth.getSnapshot().authSources[0]).toMatchObject({ status: "authenticating" });
+
+    gate.resolve();
+    await expect(first).resolves.toMatchObject({
+      authSources: [expect.objectContaining({ status: "authenticated" })],
+    });
+  });
+
+  it("restores source and provider state after controlled reauthentication failure", async () => {
+    const retryGate = Promise.withResolvers<void>();
+    const failure = new Error("controlled mock reauthentication failure");
+    let authenticationCount = 0;
+    const auth = new MockAuthOrchestrator("mock-user-a", {
+      authenticationHandler: async () => {
+        authenticationCount += 1;
+        if (authenticationCount === 2) await retryGate.promise;
+      },
+    });
+    await auth.login({
+      authSource: "smartid",
+      mode: "official-browser",
+      scopes: mockSmartIdScopes,
+    });
+
+    const retry = auth.login({
+      authSource: "smartid",
+      mode: "official-browser",
+      scopes: mockSmartIdScopes,
+    });
+    expect(auth.getSnapshot()).toMatchObject({
+      authSources: [expect.objectContaining({ status: "authenticating" })],
+      providers: [
+        expect.objectContaining({ provider: "usaint", status: "expired" }),
+        expect.objectContaining({ provider: "lms", status: "expired" }),
+      ],
+    });
+
+    retryGate.reject(failure);
+    await expect(retry).rejects.toBe(failure);
+    expect(auth.getSnapshot()).toMatchObject({
+      authSources: [expect.objectContaining({ status: "authenticated" })],
+      providers: [
+        expect.objectContaining({ provider: "usaint", status: "ready" }),
+        expect.objectContaining({ provider: "lms", status: "ready" }),
+      ],
+    });
+  });
+
+  it("allows SmartID and Library mock authentication to run concurrently", async () => {
+    const auth = new MockAuthOrchestrator("mock-user-a");
+
+    await Promise.all([
+      auth.login({
+        authSource: "smartid",
+        mode: "official-browser",
+        scopes: mockSmartIdScopes,
+      }),
+      auth.login({
+        authSource: "library",
+        mode: "official-browser",
+        scopes: mockLibraryScopes,
+      }),
+    ]);
+
+    expect(auth.getSnapshot().authSources).toEqual([
+      expect.objectContaining({ source: "smartid", status: "authenticated" }),
+      expect.objectContaining({ source: "library", status: "authenticated" }),
+    ]);
+    expect(auth.getSnapshot().providers).toHaveLength(3);
+  });
+
   it.each([
     ["smartid", "official-browser", mockSmartIdScopes],
     ["smartid", "application-credentials", mockSmartIdScopes],
@@ -112,6 +239,7 @@ describe("mock auth matrix", () => {
         scopes: ["usaint:profile.read"],
       }),
     ).rejects.toThrow("only request library scopes");
+    expect(auth.getSnapshot()).toEqual(snapshot);
   });
 
   it("consumes application credentials once without retaining them", async () => {
@@ -167,6 +295,21 @@ describe("mock auth matrix", () => {
 
     expect(snapshot.authSources.map(({ source }) => source)).toEqual(["smartid"]);
     expect(snapshot.providers.map(({ provider }) => provider).sort()).toEqual(["lms", "usaint"]);
+  });
+
+  it("treats logout for an absent source as an idempotent no-op", async () => {
+    const auth = createMockAuthMatrix()["mock-user-a"];
+    const publicSnapshot = auth.openPublicLibrary(mockPublicLibraryScopes);
+
+    await expect(auth.logout("library")).resolves.toEqual(publicSnapshot);
+
+    await auth.login({
+      authSource: "smartid",
+      mode: "official-browser",
+      scopes: mockSmartIdScopes,
+    });
+    const loggedOut = await auth.logout("smartid");
+    await expect(auth.logout("smartid")).resolves.toEqual(loggedOut);
   });
 
   it("discards all auth and provider state on close", async () => {
