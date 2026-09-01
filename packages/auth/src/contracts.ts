@@ -41,5 +41,3 @@ export interface ProviderAdapterRegistration {
  * A validated registry may use a keyed representation internally.
  */
 export type ProviderAdapterRegistryInput = readonly ProviderAdapterRegistration[];
-
-export type ProviderAdapterRegistry = Readonly<Partial<Record<ProviderId, ProviderAdapter>>>;

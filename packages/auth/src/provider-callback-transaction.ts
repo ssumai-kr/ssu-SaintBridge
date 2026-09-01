@@ -95,11 +95,17 @@ export interface ProviderCallbackTransactionManager {
 }
 
 export const providerCallbackContractViolations = [
+  "INVALID_CALLBACK_REQUEST",
+  "INVALID_ADAPTER_REGISTRY",
   "INVALID_REGISTRY_KEY",
   "DUPLICATE_ADAPTER",
+  "INVALID_ADAPTER",
+  "INVALID_ADAPTER_DESCRIPTOR",
   "ADAPTER_PROVIDER_MISMATCH",
+  "ADAPTER_NOT_REGISTERED",
   "AUTH_SOURCE_NOT_SUPPORTED",
   "BINDING_NOT_ALLOWED",
+  "SCOPE_NOT_SUPPORTED",
   "RESULT_PROVIDER_MISMATCH",
   "RESULT_AUTH_SOURCE_MISMATCH",
   "RESULT_SCOPE_NOT_OWNED",
@@ -112,11 +118,17 @@ export const providerCallbackContractViolations = [
 export type ProviderCallbackContractViolation = (typeof providerCallbackContractViolations)[number];
 
 const violationMessages: Readonly<Record<ProviderCallbackContractViolation, string>> = {
+  INVALID_CALLBACK_REQUEST: "The provider callback request is invalid.",
+  INVALID_ADAPTER_REGISTRY: "The provider adapter registry is invalid.",
   INVALID_REGISTRY_KEY: "The provider adapter registry key is invalid.",
   DUPLICATE_ADAPTER: "A provider adapter was registered more than once.",
+  INVALID_ADAPTER: "The provider adapter is invalid.",
+  INVALID_ADAPTER_DESCRIPTOR: "The provider adapter descriptor is invalid.",
   ADAPTER_PROVIDER_MISMATCH: "The adapter descriptor does not match its registry key.",
+  ADAPTER_NOT_REGISTERED: "The requested provider adapter is not registered.",
   AUTH_SOURCE_NOT_SUPPORTED: "The adapter does not support the requested authentication source.",
   BINDING_NOT_ALLOWED: "The authentication source cannot create this provider session.",
+  SCOPE_NOT_SUPPORTED: "The adapter does not support a requested provider scope.",
   RESULT_PROVIDER_MISMATCH: "The callback result belongs to a different provider.",
   RESULT_AUTH_SOURCE_MISMATCH: "The callback result is bound to a different authentication source.",
   RESULT_SCOPE_NOT_OWNED: "The callback result contains a scope owned by another provider.",

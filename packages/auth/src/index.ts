@@ -4,6 +4,8 @@ export * from "./browser-navigation-policy.js";
 export * from "./contracts.js";
 export * from "./in-memory-auth-source-state-machine.js";
 export * from "./managed-browser-runner.js";
+export * from "./provider-adapter-registry.js";
+export * from "./provider-callback-plan.js";
 export * from "./provider-callback-transaction.js";
 export * from "./provider-http-sessions.js";
 export * from "./stateful-authentication-executor.js";
