@@ -17,6 +17,7 @@ import {
   ProviderCallbackContractError,
   isProviderCallbackBindingAllowed,
   type BeginProviderCallbackTransactionOptions,
+  type ProviderCallbackCommit,
   type ProviderCallbackTransaction,
   type ProviderCallbackTransactionManager,
   type StageProviderCallbackResultOptions,
@@ -206,7 +207,7 @@ export class InMemoryProviderCallbackTransactionManager implements ProviderCallb
     );
   }
 
-  async commit(transaction: ProviderCallbackTransaction): Promise<readonly ProviderSession[]> {
+  commit(transaction: ProviderCallbackTransaction): ProviderCallbackCommit {
     const tracked = this.#requireActive(transaction);
     if (
       tracked.staged.size !== tracked.requestedScopesByProvider.size ||
@@ -237,8 +238,7 @@ export class InMemoryProviderCallbackTransactionManager implements ProviderCallb
     }
     tracked.state = "committed";
     tracked.staged.clear();
-    await cleanup;
-    return this.getSnapshot();
+    return Object.freeze({ sessions: this.getSnapshot(), cleanup });
   }
 
   async rollback(transaction: ProviderCallbackTransaction): Promise<void> {

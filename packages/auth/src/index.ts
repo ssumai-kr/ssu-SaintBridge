@@ -11,4 +11,5 @@ export * from "./provider-callback-plan.js";
 export * from "./provider-callback-transaction.js";
 export * from "./provider-http-sessions.js";
 export * from "./stateful-authentication-executor.js";
+export * from "./stateful-provider-authentication-executor.js";
 export * from "./transient-credentials.js";

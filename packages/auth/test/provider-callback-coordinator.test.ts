@@ -14,6 +14,7 @@ import {
   ProviderCallbackCoordinator,
   type ProviderAdapter,
   type ProviderCallbackContext,
+  type ProviderCallbackCommit,
   type ProviderCallbackContractViolation,
   type ProviderCallbackTransaction,
   type ProviderCallbackTransactionManager,
@@ -77,13 +78,13 @@ class TestTransactionManager implements ProviderCallbackTransactionManager {
     this.events.push(`stage:${options.expectedProvider}`);
   }
 
-  async commit(transaction: ProviderCallbackTransaction): Promise<readonly ProviderSession[]> {
+  commit(transaction: ProviderCallbackTransaction): ProviderCallbackCommit {
     this.#assertActive(transaction);
     this.events.push("commit");
     if (this.#commitError !== undefined) throw this.#commitError;
     this.#committed = Object.freeze(this.staged.map(({ result }) => result));
     this.#active = undefined;
-    return this.#committed;
+    return Object.freeze({ sessions: this.#committed, cleanup: Promise.resolve() });
   }
 
   async rollback(transaction: ProviderCallbackTransaction): Promise<void> {

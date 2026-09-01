@@ -21,6 +21,7 @@ import {
 } from "./provider-callback-plan.js";
 import {
   ProviderCallbackContractError,
+  type ProviderCallbackCommit,
   type ProviderCallbackContractViolation,
   type ProviderCallbackTransaction,
   type ProviderCallbackTransactionManager,
@@ -47,6 +48,24 @@ export interface ProviderCallbackCoordinatorOptions {
 export interface ExecuteProviderCallbacksOptions extends CreateProviderCallbackPlanOptions {
   readonly signal: AbortSignal;
 }
+
+declare const preparedProviderCallbacksBrand: unique symbol;
+
+export interface PreparedProviderCallbacks {
+  readonly [preparedProviderCallbacksBrand]: true;
+}
+
+interface TrackedPreparedProviderCallbacks {
+  readonly transaction: ProviderCallbackTransaction;
+  readonly authSource: AuthSourceId;
+  readonly inputMode: AuthInputMode;
+  readonly requestedScopes: readonly Scope[];
+  readonly signal: AbortSignal;
+  state: "prepared" | "committed" | "rolled-back";
+}
+
+const scopesEqual = (left: readonly Scope[], right: readonly Scope[]): boolean =>
+  left.length === right.length && left.every((scope, index) => scope === right[index]);
 
 const createContractError = (
   violation: ProviderCallbackContractViolation,
@@ -225,6 +244,7 @@ export class ProviderCallbackCoordinator {
   readonly #adapters: ProviderAdapterRegistry;
   readonly #transactions: ProviderCallbackTransactionManager;
   readonly #createTransport: ProviderCallbackTransportFactory;
+  readonly #prepared = new WeakMap<PreparedProviderCallbacks, TrackedPreparedProviderCallbacks>();
 
   constructor(options: ProviderCallbackCoordinatorOptions) {
     this.#adapters = options.adapters;
@@ -232,7 +252,7 @@ export class ProviderCallbackCoordinator {
     this.#createTransport = options.createTransport;
   }
 
-  async execute(options: ExecuteProviderCallbacksOptions): Promise<readonly ProviderSession[]> {
+  async prepare(options: ExecuteProviderCallbacksOptions): Promise<PreparedProviderCallbacks> {
     const plan = createProviderCallbackPlan(options, this.#adapters);
     const requestedScopes = Object.freeze(
       plan.callbacks.flatMap((callback) => callback.requestedScopes),
@@ -282,9 +302,82 @@ export class ProviderCallbackCoordinator {
       }
 
       options.signal.throwIfAborted();
-      return await this.#transactions.commit(transaction);
+      const prepared = Object.freeze({}) as PreparedProviderCallbacks;
+      this.#prepared.set(prepared, {
+        transaction,
+        authSource: plan.authSource,
+        inputMode: plan.inputMode,
+        requestedScopes,
+        signal: options.signal,
+        state: "prepared",
+      });
+      return prepared;
     } catch (error: unknown) {
       return rollbackPreservingOriginalError(this.#transactions, transaction, error);
     }
+  }
+
+  commit(
+    prepared: PreparedProviderCallbacks,
+    binding: CreateProviderCallbackPlanOptions,
+  ): ProviderCallbackCommit {
+    const tracked = this.#requirePrepared(prepared);
+    const expectedPlan = createProviderCallbackPlan(binding, this.#adapters);
+    const expectedScopes = expectedPlan.callbacks.flatMap((callback) => callback.requestedScopes);
+    if (
+      tracked.authSource !== expectedPlan.authSource ||
+      tracked.inputMode !== expectedPlan.inputMode ||
+      !scopesEqual(tracked.requestedScopes, expectedScopes)
+    ) {
+      throw new ProviderCallbackContractError("PREPARED_CALLBACK_BINDING_MISMATCH", {
+        authSource: expectedPlan.authSource,
+      });
+    }
+    tracked.signal.throwIfAborted();
+    const commit = this.#transactions.commit(tracked.transaction);
+    tracked.state = "committed";
+    return commit;
+  }
+
+  async rollback(prepared: PreparedProviderCallbacks): Promise<void> {
+    const tracked = this.#requirePrepared(prepared);
+    tracked.state = "rolled-back";
+    await this.#transactions.rollback(tracked.transaction);
+  }
+
+  async execute(options: ExecuteProviderCallbacksOptions): Promise<readonly ProviderSession[]> {
+    const prepared = await this.prepare(options);
+    try {
+      const commit = this.commit(prepared, options);
+      await commit.cleanup;
+      return commit.sessions;
+    } catch (error: unknown) {
+      try {
+        await this.rollback(prepared);
+      } catch {
+        // A commit or cleanup failure remains primary.
+      }
+      throw error;
+    }
+  }
+
+  getSnapshot(): readonly ProviderSession[] {
+    return this.#transactions.getSnapshot();
+  }
+
+  #requirePrepared(prepared: PreparedProviderCallbacks): TrackedPreparedProviderCallbacks {
+    if (typeof prepared !== "object" || prepared === null) {
+      throw new ProviderCallbackContractError("TRANSACTION_NOT_ACTIVE");
+    }
+    const tracked = this.#prepared.get(prepared);
+    if (tracked === undefined) {
+      throw new ProviderCallbackContractError("TRANSACTION_NOT_ACTIVE");
+    }
+    if (tracked.state !== "prepared") {
+      throw new ProviderCallbackContractError("STALE_TRANSACTION", {
+        authSource: tracked.authSource,
+      });
+    }
+    return tracked;
   }
 }

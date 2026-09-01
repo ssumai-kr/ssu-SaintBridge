@@ -2,7 +2,7 @@
 
 SaintBridge separates authentication sources, authentication input modes, and data-provider sessions.
 
-This document describes the authentication execution boundary completed in `AUTH-01` and the independent SmartID/Library state lifecycle completed in `AUTH-02`. It does not mean that live SmartID or Library sign-in is available yet. Source-specific success detection, callback processing, and real provider-session creation begin in `AUTH-03` and later AUTH tasks.
+This document describes the authentication execution boundary completed in `AUTH-01`, the independent SmartID/Library state lifecycle completed in `AUTH-02`, and the transactional provider callback/session-binding layer completed in `AUTH-03`. It does not mean that live SmartID or Library sign-in is available yet. Provider-specific success detection, cookie transfer, and real SAP, LearningX, and Library callback protocols remain later work.
 
 ## Model
 
@@ -57,7 +57,42 @@ SmartID and Library may authenticate concurrently, but only one attempt may own 
 
 Snapshots are frozen, deterministically ordered as SmartID then Library, and never contain credentials, credential callbacks, cookies, browser objects, or internal attempt ownership data.
 
-The mock orchestrator uses the same stateful executor. Tests may inject a non-sensitive `authenticationHandler` to pause, succeed, or fail authentication deterministically without a school account. During reauthentication, mock provider sessions derived from that source are exposed as expired until the attempt succeeds or rolls back.
+The mock orchestrator uses the production stateful provider authentication executor and callback transaction coordinator. Tests may inject non-sensitive authentication and provider-callback handlers to pause, succeed, or fail either phase deterministically without a school account. During reauthentication, provider sessions derived from that source are exposed as expired until the attempt succeeds or rolls back.
+
+## Provider callback and session binding
+
+`AUTH-03` defines the common orchestration layer used after an authentication handler recognizes source-level success. It supports these bindings:
+
+| Authentication source | Provider callback                         |
+| --------------------- | ----------------------------------------- |
+| SmartID               | u-SAINT                                   |
+| SmartID               | LMS                                       |
+| SmartID               | Library delegated session, when supported |
+| Library               | Library-native session                    |
+
+Library authentication cannot create u-SAINT or LMS sessions. The validated adapter registry also requires its registration key to match the adapter descriptor and rejects duplicate, malformed, unsupported-source, and unsupported-scope registrations or requests.
+
+The callback plan is deterministic regardless of requested-scope order:
+
+```text
+validate source, input mode, scopes, and adapters
+  -> group requested scopes by owning provider
+  -> order callbacks as u-SAINT, LMS, Library
+  -> create one staged provider HTTP session per callback
+  -> invoke each adapter with only that provider's scopes
+  -> validate and stage every ProviderSession
+  -> bind the prepared callbacks to the active auth-source attempt
+  -> commit provider sessions and complete the source without an await gap
+  -> asynchronously close transports replaced by the successful commit
+```
+
+Every callback result must match the registry provider and requested authentication source. Its granted scopes must belong to that provider, stay within the provider-specific request, contain no duplicate provider result, and pass the public `ProviderSession` schema. An opaque prepared-callback token records ownership internally without exposing callback results, transports, cookies, or source attempt tokens.
+
+Provider transports are created lazily and remain staged until commit. A callback failure, validation failure, cancellation, binding mismatch, or stale provider revision rolls the transaction back and closes all newly staged transports. Previously committed sessions and unrelated providers or authentication sources remain unchanged. Cleanup failure cannot replace the original callback or stale-attempt error.
+
+`StatefulProviderAuthenticationExecutor` links this transaction to the AUTH-02 source attempt. Before publication it verifies that the source attempt is still active and that the prepared callback source, input mode, and canonical scope set match the login request. The provider commit and source completion then run consecutively without an asynchronous observation point. Public snapshots contain only schema-validated source and provider metadata; provider transports and callback ownership stay private. If a source is authenticating or expired, its previously committed providers are projected as expired.
+
+The mock orchestrator follows this production path rather than constructing provider sessions directly. Its tests cover deterministic routing, partial rollback, stale SmartID-delegated versus Library-native races, per-provider transport separation, and per-user transport separation.
 
 ## Execution flow
 
@@ -156,7 +191,7 @@ Do not use a real account in automated tests. Do not retain screenshots, raw HTM
 - final SmartID and Library entry URLs and redirect allowlists
 - live login completion detection
 - MFA, CAPTCHA, invalid-credential, and account-lock classification
-- u-SAINT, LMS, and Library callback processing
+- provider-specific u-SAINT, LMS, and Library callback protocols
 - browser-to-provider cookie transfer
 - real provider-session creation
 - local REST authentication endpoints

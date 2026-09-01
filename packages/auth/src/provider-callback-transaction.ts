@@ -81,6 +81,12 @@ export interface StageProviderCallbackResultOptions {
   readonly transport: HttpSession;
 }
 
+export interface ProviderCallbackCommit {
+  readonly sessions: readonly ProviderSession[];
+  /** Non-failing cleanup of provider transports replaced by this commit. */
+  readonly cleanup: Promise<void>;
+}
+
 /**
  * Owns staged callback results until an atomic commit transfers them to the
  * committed provider store. Rollback closes every staged transport and leaves
@@ -92,7 +98,8 @@ export interface ProviderCallbackTransactionManager {
     transaction: ProviderCallbackTransaction,
     options: StageProviderCallbackResultOptions,
   ): void;
-  commit(transaction: ProviderCallbackTransaction): Promise<readonly ProviderSession[]>;
+  /** Performs every fallible check before synchronously publishing the commit. */
+  commit(transaction: ProviderCallbackTransaction): ProviderCallbackCommit;
   rollback(transaction: ProviderCallbackTransaction): Promise<void>;
   getSnapshot(): readonly ProviderSession[];
 }
@@ -118,6 +125,7 @@ export const providerCallbackContractViolations = [
   "DUPLICATE_PROVIDER_RESULT",
   "INVALID_PROVIDER_SESSION",
   "INCOMPLETE_TRANSACTION",
+  "PREPARED_CALLBACK_BINDING_MISMATCH",
   "TRANSACTION_NOT_ACTIVE",
   "STALE_TRANSACTION",
 ] as const;
@@ -144,6 +152,8 @@ const violationMessages: Readonly<Record<ProviderCallbackContractViolation, stri
   DUPLICATE_PROVIDER_RESULT: "A provider callback result was staged more than once.",
   INVALID_PROVIDER_SESSION: "The callback result is not a valid provider session.",
   INCOMPLETE_TRANSACTION: "The provider callback transaction is incomplete.",
+  PREPARED_CALLBACK_BINDING_MISMATCH:
+    "The prepared provider callbacks do not belong to this authentication attempt.",
   TRANSACTION_NOT_ACTIVE: "The provider callback transaction is no longer active.",
   STALE_TRANSACTION: "The provider callback transaction no longer owns the staged update.",
 };

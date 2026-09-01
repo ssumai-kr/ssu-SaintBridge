@@ -71,12 +71,17 @@ export class InMemoryAuthSourceStateMachine implements AuthSourceStateMachine {
     return token;
   }
 
+  assertCanComplete(attempt: AuthSourceAttempt): void {
+    const tracked = this.#requireActiveAttempt(attempt, "complete");
+    this.#assertTransition(tracked.source, "complete", "authenticated");
+  }
+
   complete(
     attempt: AuthSourceAttempt,
     options: CompleteAuthSourceAttemptOptions = {},
   ): AuthSourceSession {
+    this.assertCanComplete(attempt);
     const tracked = this.#requireActiveAttempt(attempt, "complete");
-    this.#assertTransition(tracked.source, "complete", "authenticated");
 
     const session = createSession(
       tracked.source,
