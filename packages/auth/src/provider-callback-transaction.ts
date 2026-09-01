@@ -70,7 +70,10 @@ export interface BeginProviderCallbackTransactionOptions {
   readonly requestedScopes: readonly Scope[];
 }
 
-/** A validated callback result and the provider-owned transport backing it. */
+/**
+ * A validated callback result and the provider-owned transport backing it.
+ * Transport ownership transfers to the manager only after `stage` returns.
+ */
 export interface StageProviderCallbackResultOptions {
   readonly expectedProvider: ProviderId;
   readonly requestedScopes: readonly Scope[];
@@ -106,6 +109,7 @@ export const providerCallbackContractViolations = [
   "AUTH_SOURCE_NOT_SUPPORTED",
   "BINDING_NOT_ALLOWED",
   "SCOPE_NOT_SUPPORTED",
+  "INVALID_PROVIDER_TRANSPORT",
   "RESULT_PROVIDER_MISMATCH",
   "RESULT_AUTH_SOURCE_MISMATCH",
   "RESULT_SCOPE_NOT_OWNED",
@@ -129,6 +133,7 @@ const violationMessages: Readonly<Record<ProviderCallbackContractViolation, stri
   AUTH_SOURCE_NOT_SUPPORTED: "The adapter does not support the requested authentication source.",
   BINDING_NOT_ALLOWED: "The authentication source cannot create this provider session.",
   SCOPE_NOT_SUPPORTED: "The adapter does not support a requested provider scope.",
+  INVALID_PROVIDER_TRANSPORT: "The provider callback transport is invalid.",
   RESULT_PROVIDER_MISMATCH: "The callback result belongs to a different provider.",
   RESULT_AUTH_SOURCE_MISMATCH: "The callback result is bound to a different authentication source.",
   RESULT_SCOPE_NOT_OWNED: "The callback result contains a scope owned by another provider.",
