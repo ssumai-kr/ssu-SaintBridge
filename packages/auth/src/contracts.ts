@@ -16,6 +16,7 @@ export interface ProviderCallbackContext {
   readonly inputMode: AuthInputMode;
   readonly requestedScopes: readonly Scope[];
   readonly transport: HttpSession;
+  readonly signal: AbortSignal;
 }
 
 export interface ProviderAdapter {
@@ -29,5 +30,16 @@ export interface AuthOrchestrator {
   getSnapshot(): AuthSnapshot;
   close(): Promise<void>;
 }
+
+export interface ProviderAdapterRegistration {
+  readonly provider: ProviderId;
+  readonly adapter: ProviderAdapter;
+}
+
+/**
+ * Ordered input keeps duplicate registrations observable until validation.
+ * A validated registry may use a keyed representation internally.
+ */
+export type ProviderAdapterRegistryInput = readonly ProviderAdapterRegistration[];
 
 export type ProviderAdapterRegistry = Readonly<Partial<Record<ProviderId, ProviderAdapter>>>;
