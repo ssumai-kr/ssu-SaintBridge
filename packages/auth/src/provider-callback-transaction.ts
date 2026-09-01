@@ -92,7 +92,7 @@ export interface ProviderCallbackTransactionManager {
     transaction: ProviderCallbackTransaction,
     options: StageProviderCallbackResultOptions,
   ): void;
-  commit(transaction: ProviderCallbackTransaction): readonly ProviderSession[];
+  commit(transaction: ProviderCallbackTransaction): Promise<readonly ProviderSession[]>;
   rollback(transaction: ProviderCallbackTransaction): Promise<void>;
   getSnapshot(): readonly ProviderSession[];
 }
@@ -110,12 +110,14 @@ export const providerCallbackContractViolations = [
   "BINDING_NOT_ALLOWED",
   "SCOPE_NOT_SUPPORTED",
   "INVALID_PROVIDER_TRANSPORT",
+  "INVALID_HTTP_SESSION_REGISTRY",
   "RESULT_PROVIDER_MISMATCH",
   "RESULT_AUTH_SOURCE_MISMATCH",
   "RESULT_SCOPE_NOT_OWNED",
   "RESULT_SCOPE_NOT_REQUESTED",
   "DUPLICATE_PROVIDER_RESULT",
   "INVALID_PROVIDER_SESSION",
+  "INCOMPLETE_TRANSACTION",
   "TRANSACTION_NOT_ACTIVE",
   "STALE_TRANSACTION",
 ] as const;
@@ -134,12 +136,14 @@ const violationMessages: Readonly<Record<ProviderCallbackContractViolation, stri
   BINDING_NOT_ALLOWED: "The authentication source cannot create this provider session.",
   SCOPE_NOT_SUPPORTED: "The adapter does not support a requested provider scope.",
   INVALID_PROVIDER_TRANSPORT: "The provider callback transport is invalid.",
+  INVALID_HTTP_SESSION_REGISTRY: "The provider HTTP session registry is invalid.",
   RESULT_PROVIDER_MISMATCH: "The callback result belongs to a different provider.",
   RESULT_AUTH_SOURCE_MISMATCH: "The callback result is bound to a different authentication source.",
   RESULT_SCOPE_NOT_OWNED: "The callback result contains a scope owned by another provider.",
   RESULT_SCOPE_NOT_REQUESTED: "The callback result exceeds the provider-specific request.",
   DUPLICATE_PROVIDER_RESULT: "A provider callback result was staged more than once.",
   INVALID_PROVIDER_SESSION: "The callback result is not a valid provider session.",
+  INCOMPLETE_TRANSACTION: "The provider callback transaction is incomplete.",
   TRANSACTION_NOT_ACTIVE: "The provider callback transaction is no longer active.",
   STALE_TRANSACTION: "The provider callback transaction no longer owns the staged update.",
 };

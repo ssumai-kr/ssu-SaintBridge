@@ -3,6 +3,7 @@ export * from "./auth-source-state-machine.js";
 export * from "./browser-navigation-policy.js";
 export * from "./contracts.js";
 export * from "./in-memory-auth-source-state-machine.js";
+export * from "./in-memory-provider-callback-transaction-manager.js";
 export * from "./managed-browser-runner.js";
 export * from "./provider-adapter-registry.js";
 export * from "./provider-callback-coordinator.js";

@@ -77,7 +77,7 @@ class TestTransactionManager implements ProviderCallbackTransactionManager {
     this.events.push(`stage:${options.expectedProvider}`);
   }
 
-  commit(transaction: ProviderCallbackTransaction): readonly ProviderSession[] {
+  async commit(transaction: ProviderCallbackTransaction): Promise<readonly ProviderSession[]> {
     this.#assertActive(transaction);
     this.events.push("commit");
     if (this.#commitError !== undefined) throw this.#commitError;

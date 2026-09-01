@@ -282,7 +282,7 @@ export class ProviderCallbackCoordinator {
       }
 
       options.signal.throwIfAborted();
-      return this.#transactions.commit(transaction);
+      return await this.#transactions.commit(transaction);
     } catch (error: unknown) {
       return rollbackPreservingOriginalError(this.#transactions, transaction, error);
     }
