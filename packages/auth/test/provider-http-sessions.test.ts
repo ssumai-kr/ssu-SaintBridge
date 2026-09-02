@@ -14,6 +14,23 @@ interface SessionObservation {
   readonly transport: HttpSession;
 }
 
+class CloseTrackingHttpSession implements HttpSession {
+  readonly id: number;
+  closeCalls = 0;
+
+  constructor(id: number) {
+    this.id = id;
+  }
+
+  async request(): Promise<never> {
+    throw new Error("The close-tracking transport must not make requests.");
+  }
+
+  async close(): Promise<void> {
+    this.closeCalls += 1;
+  }
+}
+
 const createRegistry = (
   user: string,
   observations: SessionObservation[],
@@ -117,6 +134,31 @@ describe("ProviderHttpSessionRegistry", () => {
     await registry.close();
   });
 
+  it("defers replaced provider cleanup until after commit publication returns", async () => {
+    const innerSessions: CloseTrackingHttpSession[] = [];
+    const registry = new ProviderHttpSessionRegistry(
+      [{ provider: "lms", allowedHosts: [upstreamUrl.hostname] }],
+      {
+        sessionFactory: () => {
+          const session = new CloseTrackingHttpSession(innerSessions.length);
+          innerSessions.push(session);
+          return session;
+        },
+      },
+    );
+    const previous = registry.createStaged("lms");
+    await registry.commitStaged([{ provider: "lms", transport: previous }]);
+    const replacement = registry.createStaged("lms");
+
+    const cleanup = registry.commitStaged([{ provider: "lms", transport: replacement }]);
+    expect(registry.get("lms")).toBe(replacement);
+    expect(innerSessions.map(({ closeCalls }) => closeCalls)).toEqual([0, 0]);
+
+    await cleanup;
+    expect(innerSessions.map(({ closeCalls }) => closeCalls)).toEqual([1, 0]);
+    await registry.close();
+  });
+
   it("discards a staged provider without damaging an active provider", async () => {
     const observations: SessionObservation[] = [];
     const registry = createRegistry("alpha", observations);
@@ -185,6 +227,30 @@ describe("ProviderHttpSessionRegistry", () => {
     expect(() => malformed.createStaged("lms")).toThrowError(
       expect.objectContaining({ violation: "INVALID_SESSION_FACTORY_RESULT" }),
     );
+  });
+
+  it("normalizes thrown session factory errors without exposing their details", () => {
+    const factoryError = new Error("sensitive factory failure details");
+    const registry = new ProviderHttpSessionRegistry(
+      [{ provider: "lms", allowedHosts: [upstreamUrl.hostname] }],
+      {
+        sessionFactory: () => {
+          throw factoryError;
+        },
+      },
+    );
+
+    let failure: unknown;
+    try {
+      registry.createStaged("lms");
+    } catch (error: unknown) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(ProviderHttpSessionRegistryError);
+    expect(failure).not.toBe(factoryError);
+    expect(failure).toMatchObject({ violation: "INVALID_SESSION_FACTORY_RESULT" });
+    expect(JSON.stringify(failure)).not.toContain("sensitive factory failure details");
   });
 
   it("separates configured providers from active provider sessions", () => {

@@ -165,7 +165,13 @@ export class ProviderHttpSessionRegistry {
       throw new ProviderHttpSessionRegistryError("PROVIDER_NOT_CONFIGURED");
     }
 
-    const inner = parseFactoryResult(this.#sessionFactory(context));
+    let factoryResult: unknown;
+    try {
+      factoryResult = this.#sessionFactory(context);
+    } catch {
+      throw new ProviderHttpSessionRegistryError("INVALID_SESSION_FACTORY_RESULT");
+    }
+    const inner = parseFactoryResult(factoryResult);
     if (this.#issuedInnerSessions.has(inner)) {
       throw new ProviderHttpSessionRegistryError("SESSION_FACTORY_REUSED_TRANSPORT");
     }
@@ -208,9 +214,9 @@ export class ProviderHttpSessionRegistry {
       this.#activeSessions.set(provider, replacement.transport);
     }
 
-    return Promise.allSettled(replaced.map(async (session) => session.close())).then(
-      () => undefined,
-    );
+    return Promise.resolve()
+      .then(() => Promise.allSettled(replaced.map(async (session) => session.close())))
+      .then(() => undefined);
   }
 
   async discardStaged(transport: HttpSession): Promise<void> {
