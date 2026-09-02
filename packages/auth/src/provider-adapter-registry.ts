@@ -78,7 +78,7 @@ export class ProviderAdapterRegistry {
 
   constructor(registrations: ProviderAdapterRegistryInput) {
     if (!Array.isArray(registrations)) {
-      throw new ProviderCallbackContractError("INVALID_REGISTRY_KEY");
+      throw new ProviderCallbackContractError("INVALID_ADAPTER_REGISTRY");
     }
 
     const adapters = new Map<ProviderId, ProviderAdapter>();
