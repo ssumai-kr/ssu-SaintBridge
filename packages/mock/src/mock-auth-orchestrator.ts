@@ -1,20 +1,29 @@
 import {
   AuthenticationExecutor,
-  StatefulAuthenticationExecutor,
+  InMemoryProviderCallbackTransactionManager,
+  ProviderAdapterRegistry,
+  ProviderCallbackCoordinator,
+  ProviderHttpSessionRegistry,
+  StatefulProviderAuthenticationExecutor,
+  createPreparedProviderAuthentication,
   parseAuthLoginRequest,
   type AuthLoginRequest,
   type AuthenticationExecutionContext,
   type AuthOrchestrator,
+  type ProviderAdapter,
+  type ProviderCallbackContext,
 } from "@ssu-saintbridge/auth";
 import {
   authSnapshotSchema,
   authSourceIdSchema,
+  providerDescriptorSchema,
   providerForScope,
   providerIdSchema,
+  providerIds,
   providerSessionSchema,
   scopeSchema,
+  scopes,
   type AuthSnapshot,
-  type AuthInputMode,
   type AuthSourceId,
   type ProviderAuthenticationSource,
   type ProviderId,
@@ -41,44 +50,29 @@ export const mockAllProviderScopes = [
 
 const publicLibraryScopeSet = new Set<Scope>(mockPublicLibraryScopes);
 
-interface MockAuthenticationExecution {
-  readonly authSource: AuthSourceId;
-  readonly inputMode: AuthInputMode;
-  readonly requestedScopes: readonly Scope[];
+export type MockAuthenticationHandler = (context: AuthenticationExecutionContext) => Promise<void>;
+
+export type MockProviderCallbackHandler = (
+  provider: ProviderId,
+  context: ProviderCallbackContext,
+) => Promise<void>;
+
+export interface MockProviderTransportEvent {
+  readonly type: "created" | "closed";
+  readonly provider: ProviderId;
+  readonly transportId: string;
 }
 
-export type MockAuthenticationHandler = (context: AuthenticationExecutionContext) => Promise<void>;
+export type MockProviderTransportHandler = (event: MockProviderTransportEvent) => void;
 
 export interface MockAuthOrchestratorOptions {
   readonly authenticationHandler?: MockAuthenticationHandler;
+  readonly providerCallbackHandler?: MockProviderCallbackHandler;
+  readonly providerTransportHandler?: MockProviderTransportHandler;
 }
 
-const completeMockAuthentication = (
-  context: AuthenticationExecutionContext,
-): Readonly<MockAuthenticationExecution> =>
-  Object.freeze({
-    authSource: context.authSource,
-    inputMode: context.inputMode,
-    requestedScopes: context.requestedScopes,
-  });
-
 const defaultMockAuthenticationHandler: MockAuthenticationHandler = async () => undefined;
-
-const createMockAuthenticationExecutor = (
-  authenticationHandler: MockAuthenticationHandler,
-): StatefulAuthenticationExecutor<MockAuthenticationExecution> =>
-  new StatefulAuthenticationExecutor(
-    new AuthenticationExecutor({
-      officialBrowser: async (context) => {
-        await authenticationHandler(context);
-        return completeMockAuthentication(context);
-      },
-      applicationCredentials: async (context) => {
-        await authenticationHandler(context);
-        return completeMockAuthentication(context);
-      },
-    }),
-  );
+const defaultMockProviderCallbackHandler: MockProviderCallbackHandler = async () => undefined;
 
 const capabilityForScope = (scope: Scope): string => scope.slice(scope.indexOf(":") + 1);
 
@@ -95,62 +89,183 @@ const assertAuthenticationSupportsScope = (
   }
 };
 
+const createProviderSession = (
+  provider: ProviderId,
+  authenticatedBy: ProviderAuthenticationSource,
+  grantedScopes: readonly Scope[],
+): ProviderSession => {
+  for (const scope of grantedScopes) assertAuthenticationSupportsScope(authenticatedBy, scope);
+  return providerSessionSchema.parse({
+    provider,
+    authenticatedBy,
+    status: "ready",
+    grantedScopes,
+    capabilities: grantedScopes.map((scope) => ({
+      id: capabilityForScope(scope),
+      available: true,
+    })),
+    expiresAt: null,
+  });
+};
+
 const createProviderSessions = (
   authenticatedBy: ProviderAuthenticationSource,
-  scopes: readonly Scope[],
+  requestedScopes: readonly Scope[],
 ): readonly ProviderSession[] => {
-  const grouped = new Map<ProviderId, Scope[]>();
-  for (const scope of scopes) {
+  const scopesByProvider = new Map<ProviderId, Scope[]>();
+  for (const scope of requestedScopes) {
     assertAuthenticationSupportsScope(authenticatedBy, scope);
     const provider = providerForScope(scope);
-    const providerScopes = grouped.get(provider) ?? [];
+    const providerScopes = scopesByProvider.get(provider) ?? [];
     providerScopes.push(scope);
-    grouped.set(provider, providerScopes);
+    scopesByProvider.set(provider, providerScopes);
+  }
+  return providerIds.flatMap((provider) => {
+    const providerScopes = scopesByProvider.get(provider);
+    return providerScopes === undefined
+      ? []
+      : [createProviderSession(provider, authenticatedBy, providerScopes)];
+  });
+};
+
+const createMockProviderAdapter = (
+  provider: ProviderId,
+  callbackHandler: MockProviderCallbackHandler,
+): ProviderAdapter => {
+  const supportedScopes = scopes.filter((scope) => providerForScope(scope) === provider);
+  return Object.freeze({
+    descriptor: providerDescriptorSchema.parse({
+      provider,
+      supportedAuthSources: provider === "library" ? ["smartid", "library"] : ["smartid"],
+      supportsPublicAccess: provider === "library",
+      supportedScopes,
+      capabilities: supportedScopes.map(capabilityForScope),
+    }),
+    openSession: async (context: ProviderCallbackContext) => {
+      await callbackHandler(provider, context);
+      return createProviderSession(provider, context.authSource, context.requestedScopes);
+    },
+  });
+};
+
+class MockProviderHttpSession {
+  readonly #provider: ProviderId;
+  readonly #transportId: string;
+  readonly #eventHandler: MockProviderTransportHandler | undefined;
+  #closed = false;
+
+  constructor(
+    provider: ProviderId,
+    transportId: string,
+    eventHandler: MockProviderTransportHandler | undefined,
+  ) {
+    this.#provider = provider;
+    this.#transportId = transportId;
+    this.#eventHandler = eventHandler;
   }
 
-  return [...grouped.entries()].map(([provider, grantedScopes]) =>
-    providerSessionSchema.parse({
-      provider,
-      authenticatedBy,
-      status: "ready",
-      grantedScopes,
-      capabilities: grantedScopes.map((scope) => ({
-        id: capabilityForScope(scope),
-        available: true,
-      })),
-      expiresAt: null,
-    }),
+  async request(): Promise<never> {
+    throw new Error("Mock provider transports do not perform network requests.");
+  }
+
+  async close(): Promise<void> {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#eventHandler?.(
+      Object.freeze({
+        type: "closed",
+        provider: this.#provider,
+        transportId: this.#transportId,
+      }),
+    );
+  }
+}
+
+interface MockAuthenticationRuntime {
+  readonly executor: StatefulProviderAuthenticationExecutor<void>;
+  readonly httpSessions: ProviderHttpSessionRegistry;
+}
+
+const createMockAuthenticationRuntime = (
+  options: MockAuthOrchestratorOptions,
+): MockAuthenticationRuntime => {
+  const authenticationHandler = options.authenticationHandler ?? defaultMockAuthenticationHandler;
+  const callbackHandler = options.providerCallbackHandler ?? defaultMockProviderCallbackHandler;
+  const adapters = providerIds.map((provider) =>
+    createMockProviderAdapter(provider, callbackHandler),
   );
+  let nextTransportId = 0;
+  const httpSessions = new ProviderHttpSessionRegistry(
+    providerIds.map((provider) => ({
+      provider,
+      allowedHosts: [`${provider}.example.invalid`],
+    })),
+    {
+      sessionFactory: ({ provider }) => {
+        const transportId = `${provider}:${nextTransportId}`;
+        nextTransportId += 1;
+        options.providerTransportHandler?.(
+          Object.freeze({ type: "created", provider, transportId }),
+        );
+        return new MockProviderHttpSession(provider, transportId, options.providerTransportHandler);
+      },
+    },
+  );
+  const transactions = new InMemoryProviderCallbackTransactionManager(httpSessions);
+  const coordinator = new ProviderCallbackCoordinator({
+    adapters: new ProviderAdapterRegistry(
+      adapters.map((adapter) => ({ provider: adapter.descriptor.provider, adapter })),
+    ),
+    transactions,
+    createTransport: transactions.createTransport,
+  });
+  const execute = async (context: AuthenticationExecutionContext) => {
+    await authenticationHandler(context);
+    return createPreparedProviderAuthentication(
+      undefined,
+      await coordinator.prepare({
+        authSource: context.authSource,
+        inputMode: context.inputMode,
+        requestedScopes: context.requestedScopes,
+        signal: context.signal,
+      }),
+    );
+  };
+  const executor = new StatefulProviderAuthenticationExecutor(
+    new AuthenticationExecutor({
+      officialBrowser: execute,
+      applicationCredentials: execute,
+    }),
+    coordinator,
+  );
+  return Object.freeze({ executor, httpSessions });
 };
 
 export class MockAuthOrchestrator implements AuthOrchestrator {
   readonly userKey: MockUserKey;
-  readonly #authenticationExecutor: StatefulAuthenticationExecutor<MockAuthenticationExecution>;
-  #providers: readonly ProviderSession[] = Object.freeze([]);
+  readonly #authenticationExecutor: StatefulProviderAuthenticationExecutor<void>;
+  readonly #httpSessions: ProviderHttpSessionRegistry;
+  readonly #visibleProvidersBySource = new Map<AuthSourceId, ReadonlySet<ProviderId>>();
+  readonly #expiredProviders = new Set<ProviderId>();
+  #publicLibrary: ProviderSession | undefined;
   #closed = false;
 
   constructor(userKey: MockUserKey, options: MockAuthOrchestratorOptions = {}) {
     this.userKey = userKey;
-    this.#authenticationExecutor = createMockAuthenticationExecutor(
-      options.authenticationHandler ?? defaultMockAuthenticationHandler,
-    );
+    const runtime = createMockAuthenticationRuntime(options);
+    this.#authenticationExecutor = runtime.executor;
+    this.#httpSessions = runtime.httpSessions;
   }
 
   async login(request: AuthLoginRequest): Promise<AuthSnapshot> {
     this.#assertOpen();
     const parsedRequest = parseAuthLoginRequest(request);
-    const openedProviders = createProviderSessions(parsedRequest.authSource, parsedRequest.scopes);
-    const execution = await this.#authenticationExecutor.execute(parsedRequest);
-    const authSource = execution.authSource;
+    await this.#authenticationExecutor.execute(parsedRequest);
 
-    const openedProviderIds = new Set(openedProviders.map(({ provider }) => provider));
-    this.#providers = Object.freeze([
-      ...this.#providers.filter(
-        (session) =>
-          session.authenticatedBy !== authSource && !openedProviderIds.has(session.provider),
-      ),
-      ...openedProviders,
-    ]);
+    const providerSet = new Set(parsedRequest.scopes.map(providerForScope));
+    this.#visibleProvidersBySource.set(parsedRequest.authSource, providerSet);
+    for (const provider of providerSet) this.#expiredProviders.delete(provider);
+    if (providerSet.has("library")) this.#publicLibrary = undefined;
     return this.getSnapshot();
   }
 
@@ -159,25 +274,31 @@ export class MockAuthOrchestrator implements AuthOrchestrator {
     const parsedSource = authSourceIdSchema.parse(authSource);
     const sourceIsActive = this.#authenticationExecutor
       .getSnapshot()
-      .some(({ source }) => source === parsedSource);
-    if (sourceIsActive) this.#authenticationExecutor.remove(parsedSource);
-    this.#providers = Object.freeze(
-      this.#providers.filter(({ authenticatedBy }) => authenticatedBy !== parsedSource),
-    );
+      .authSources.some(({ source }) => source === parsedSource);
+    if (!sourceIsActive) return this.getSnapshot();
+
+    const ownedProviders = this.#authenticationExecutor
+      .getSnapshot()
+      .providers.filter(({ authenticatedBy }) => authenticatedBy === parsedSource)
+      .map(({ provider }) => provider);
+    this.#authenticationExecutor.remove(parsedSource);
+    this.#visibleProvidersBySource.delete(parsedSource);
+    for (const provider of ownedProviders) {
+      this.#expiredProviders.delete(provider);
+      if (this.#httpSessions.has(provider)) await this.#httpSessions.closeProvider(provider);
+    }
     return this.getSnapshot();
   }
 
-  openPublicLibrary(scopes: readonly Scope[]): AuthSnapshot {
+  openPublicLibrary(requestedScopes: readonly Scope[]): AuthSnapshot {
     this.#assertOpen();
-    const parsedScopes = scopes.map((scope) => scopeSchema.parse(scope));
+    const parsedScopes = requestedScopes.map((scope) => scopeSchema.parse(scope));
     const [publicLibrary] = createProviderSessions("public", parsedScopes);
     if (publicLibrary === undefined || publicLibrary.provider !== "library") {
       throw new TypeError("Public access requires at least one public library scope.");
     }
-    this.#providers = Object.freeze([
-      ...this.#providers.filter(({ provider }) => provider !== "library"),
-      publicLibrary,
-    ]);
+    this.#expiredProviders.delete("library");
+    this.#publicLibrary = publicLibrary;
     return this.getSnapshot();
   }
 
@@ -186,17 +307,28 @@ export class MockAuthOrchestrator implements AuthOrchestrator {
       return authSnapshotSchema.parse({ state: "closed", authSources: [], providers: [] });
     }
 
-    const authSources = this.#authenticationExecutor.getSnapshot();
-    const authSourceById = new Map(authSources.map((source) => [source.source, source]));
-    const providers = this.#providers.flatMap((provider) => {
-      if (provider.authenticatedBy === "public") return [provider];
-      const authSource = authSourceById.get(provider.authenticatedBy);
-      if (authSource === undefined) return [];
-      if (authSource.status === "authenticated") return [provider];
-      return [providerSessionSchema.parse({ ...provider, status: "expired" })];
+    const productionSnapshot = this.#authenticationExecutor.getSnapshot();
+    let providers = productionSnapshot.providers.filter((provider) => {
+      if (provider.authenticatedBy === "public") return true;
+      return this.#visibleProvidersBySource.get(provider.authenticatedBy)?.has(provider.provider);
     });
+    if (this.#publicLibrary !== undefined) {
+      providers = [
+        ...providers.filter(({ provider }) => provider !== "library"),
+        this.#publicLibrary,
+      ];
+    }
+    providers = providers.map((provider) =>
+      this.#expiredProviders.has(provider.provider)
+        ? providerSessionSchema.parse({ ...provider, status: "expired" })
+        : provider,
+    );
 
-    return authSnapshotSchema.parse({ state: "open", authSources, providers });
+    return authSnapshotSchema.parse({
+      state: "open",
+      authSources: productionSnapshot.authSources,
+      providers,
+    });
   }
 
   expireAuthSource(authSource: AuthSourceId): AuthSnapshot {
@@ -209,25 +341,20 @@ export class MockAuthOrchestrator implements AuthOrchestrator {
   expireProvider(provider: ProviderId): AuthSnapshot {
     this.#assertOpen();
     const parsedProvider = providerIdSchema.parse(provider);
-    const sessions = this.#providers.map((session) =>
-      session.provider === parsedProvider
-        ? providerSessionSchema.parse({ ...session, status: "expired" })
-        : session,
-    );
-    if (!sessions.some((session) => session.provider === parsedProvider)) {
+    if (!this.getSnapshot().providers.some((session) => session.provider === parsedProvider)) {
       throw new Error("The mock provider session is not active.");
     }
-    this.#providers = Object.freeze(sessions);
+    this.#expiredProviders.add(parsedProvider);
     return this.getSnapshot();
   }
 
   async close(): Promise<void> {
     if (this.#closed) return;
-    for (const { source } of this.#authenticationExecutor.getSnapshot()) {
-      this.#authenticationExecutor.remove(source);
-    }
-    this.#providers = Object.freeze([]);
     this.#closed = true;
+    this.#visibleProvidersBySource.clear();
+    this.#expiredProviders.clear();
+    this.#publicLibrary = undefined;
+    await this.#httpSessions.close();
   }
 
   #assertOpen(): void {

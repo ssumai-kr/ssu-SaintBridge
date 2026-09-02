@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { TransientCredentials } from "@ssu-saintbridge/auth";
+import { TransientCredentials, type ProviderCallbackContext } from "@ssu-saintbridge/auth";
+import type { ProviderId } from "@ssu-saintbridge/types";
 
 import {
   MockAuthOrchestrator,
   createMockAuthMatrix,
+  mockAllProviderScopes,
   mockLibraryScopes,
   mockPublicLibraryScopes,
   mockSmartIdScopes,
@@ -93,11 +95,12 @@ describe("mock auth matrix", () => {
   it("restores source and provider state after controlled reauthentication failure", async () => {
     const retryGate = Promise.withResolvers<void>();
     const failure = new Error("controlled mock reauthentication failure");
-    let authenticationCount = 0;
+    let lmsCallbackCount = 0;
     const auth = new MockAuthOrchestrator("mock-user-a", {
-      authenticationHandler: async () => {
-        authenticationCount += 1;
-        if (authenticationCount === 2) await retryGate.promise;
+      providerCallbackHandler: async (provider) => {
+        if (provider !== "lms") return;
+        lmsCallbackCount += 1;
+        if (lmsCallbackCount === 2) await retryGate.promise;
       },
     });
     await auth.login({
@@ -151,6 +154,167 @@ describe("mock auth matrix", () => {
       expect.objectContaining({ source: "library", status: "authenticated" }),
     ]);
     expect(auth.getSnapshot().providers).toHaveLength(3);
+  });
+
+  it("routes SmartID scopes through deterministic provider-scoped callbacks", async () => {
+    const callbacks: Array<{
+      readonly provider: ProviderId;
+      readonly context: ProviderCallbackContext;
+    }> = [];
+    const auth = new MockAuthOrchestrator("mock-user-a", {
+      providerCallbackHandler: async (provider, context) => {
+        callbacks.push({ provider, context });
+      },
+    });
+
+    const snapshot = await auth.login({
+      authSource: "smartid",
+      mode: "official-browser",
+      scopes: mockAllProviderScopes,
+    });
+
+    expect(callbacks.map(({ provider }) => provider)).toEqual(["usaint", "lms", "library"]);
+    expect(callbacks.map(({ context }) => context.requestedScopes)).toEqual([
+      ["usaint:profile.read"],
+      ["lms:courses.read"],
+      ["library:loans.read"],
+    ]);
+    expect(new Set(callbacks.map(({ context }) => context.transport).values()).size).toBe(3);
+    expect(snapshot.providers).toEqual([
+      expect.objectContaining({ provider: "usaint", authenticatedBy: "smartid" }),
+      expect.objectContaining({ provider: "lms", authenticatedBy: "smartid" }),
+      expect.objectContaining({ provider: "library", authenticatedBy: "smartid" }),
+    ]);
+  });
+
+  it("rolls back staged callback transports without damaging another auth source", async () => {
+    const callbackFailure = new Error("controlled LMS callback failure");
+    const transportEvents: Array<{
+      readonly type: "created" | "closed";
+      readonly provider: ProviderId;
+      readonly transportId: string;
+    }> = [];
+    const auth = new MockAuthOrchestrator("mock-user-a", {
+      providerCallbackHandler: async (provider, context) => {
+        if (provider === "lms" && context.authSource === "smartid") throw callbackFailure;
+      },
+      providerTransportHandler: (event) => transportEvents.push(event),
+    });
+    await auth.login({
+      authSource: "library",
+      mode: "official-browser",
+      scopes: mockLibraryScopes,
+    });
+
+    await expect(
+      auth.login({
+        authSource: "smartid",
+        mode: "official-browser",
+        scopes: mockSmartIdScopes,
+      }),
+    ).rejects.toBe(callbackFailure);
+
+    expect(auth.getSnapshot()).toEqual({
+      state: "open",
+      authSources: [expect.objectContaining({ source: "library", status: "authenticated" })],
+      providers: [
+        expect.objectContaining({
+          provider: "library",
+          authenticatedBy: "library",
+          status: "ready",
+        }),
+      ],
+    });
+    expect(transportEvents).toEqual([
+      { type: "created", provider: "library", transportId: "library:0" },
+      { type: "created", provider: "usaint", transportId: "usaint:1" },
+      { type: "created", provider: "lms", transportId: "lms:2" },
+      { type: "closed", provider: "lms", transportId: "lms:2" },
+      { type: "closed", provider: "usaint", transportId: "usaint:1" },
+    ]);
+  });
+
+  it("rejects a late delegated callback after a Library-native callback wins", async () => {
+    const smartIdCallbackStarted = Promise.withResolvers<void>();
+    const releaseSmartIdCallback = Promise.withResolvers<void>();
+    const transportEvents: Array<{
+      readonly type: "created" | "closed";
+      readonly provider: ProviderId;
+      readonly transportId: string;
+    }> = [];
+    const auth = new MockAuthOrchestrator("mock-user-a", {
+      providerCallbackHandler: async (provider, context) => {
+        if (provider === "library" && context.authSource === "smartid") {
+          smartIdCallbackStarted.resolve();
+          await releaseSmartIdCallback.promise;
+        }
+      },
+      providerTransportHandler: (event) => transportEvents.push(event),
+    });
+
+    const lateSmartId = auth.login({
+      authSource: "smartid",
+      mode: "official-browser",
+      scopes: mockLibraryScopes,
+    });
+    await smartIdCallbackStarted.promise;
+    const libraryWinner = await auth.login({
+      authSource: "library",
+      mode: "official-browser",
+      scopes: mockLibraryScopes,
+    });
+    expect(libraryWinner.authSources).toEqual([
+      expect.objectContaining({ source: "smartid", status: "authenticating" }),
+      expect.objectContaining({ source: "library", status: "authenticated" }),
+    ]);
+    releaseSmartIdCallback.resolve();
+
+    await expect(lateSmartId).rejects.toMatchObject({ violation: "STALE_TRANSACTION" });
+    expect(auth.getSnapshot()).toEqual({
+      state: "open",
+      authSources: [expect.objectContaining({ source: "library", status: "authenticated" })],
+      providers: [expect.objectContaining({ provider: "library", authenticatedBy: "library" })],
+    });
+    expect(transportEvents).toEqual([
+      { type: "created", provider: "library", transportId: "library:0" },
+      { type: "created", provider: "library", transportId: "library:1" },
+      { type: "closed", provider: "library", transportId: "library:0" },
+    ]);
+  });
+
+  it("never shares callback transports between mock users", async () => {
+    const userATransports: object[] = [];
+    const userBTransports: object[] = [];
+    const userA = new MockAuthOrchestrator("mock-user-a", {
+      providerCallbackHandler: async (_provider, context) => {
+        userATransports.push(context.transport);
+      },
+    });
+    const userB = new MockAuthOrchestrator("mock-user-b", {
+      providerCallbackHandler: async (_provider, context) => {
+        userBTransports.push(context.transport);
+      },
+    });
+
+    await Promise.all([
+      userA.login({
+        authSource: "smartid",
+        mode: "official-browser",
+        scopes: mockSmartIdScopes,
+      }),
+      userB.login({
+        authSource: "smartid",
+        mode: "official-browser",
+        scopes: mockSmartIdScopes,
+      }),
+    ]);
+
+    expect(userATransports).toHaveLength(2);
+    expect(userBTransports).toHaveLength(2);
+    expect(new Set([...userATransports, ...userBTransports]).size).toBe(4);
+    expect(JSON.stringify([userA.getSnapshot(), userB.getSnapshot()])).not.toMatch(
+      /transport|cookie|authorization/i,
+    );
   });
 
   it.each([
@@ -214,7 +378,10 @@ describe("mock auth matrix", () => {
   });
 
   it("allows library auth to activate only the library provider", async () => {
-    const auth = createMockAuthMatrix()["mock-user-a"];
+    const callbackHandler = vi.fn(async () => undefined);
+    const auth = new MockAuthOrchestrator("mock-user-a", {
+      providerCallbackHandler: callbackHandler,
+    });
     const snapshot = await auth.login({
       authSource: "library",
       mode: "official-browser",
@@ -232,6 +399,11 @@ describe("mock auth matrix", () => {
     expect(snapshot.providers).toEqual([
       expect.objectContaining({ provider: "library", authenticatedBy: "library" }),
     ]);
+    expect(callbackHandler).toHaveBeenCalledTimes(1);
+    expect(callbackHandler).toHaveBeenCalledWith(
+      "library",
+      expect.objectContaining({ requestedScopes: ["library:loans.read"] }),
+    );
     await expect(
       auth.login({
         authSource: "library",
@@ -240,6 +412,7 @@ describe("mock auth matrix", () => {
       }),
     ).rejects.toThrow("only request library scopes");
     expect(auth.getSnapshot()).toEqual(snapshot);
+    expect(callbackHandler).toHaveBeenCalledTimes(1);
   });
 
   it("consumes application credentials once without retaining them", async () => {
@@ -313,10 +486,19 @@ describe("mock auth matrix", () => {
   });
 
   it("discards all auth and provider state on close", async () => {
-    const auth = createMockAuthMatrix()["mock-user-a"];
+    const transportEvents: Array<{
+      readonly type: "created" | "closed";
+      readonly provider: ProviderId;
+      readonly transportId: string;
+    }> = [];
+    const auth = new MockAuthOrchestrator("mock-user-a", {
+      providerTransportHandler: (event) => transportEvents.push(event),
+    });
     await loginAllProviders(auth);
     await auth.close();
 
     expect(auth.getSnapshot()).toEqual({ state: "closed", authSources: [], providers: [] });
+    expect(transportEvents.filter(({ type }) => type === "created")).toHaveLength(3);
+    expect(transportEvents.filter(({ type }) => type === "closed")).toHaveLength(3);
   });
 });

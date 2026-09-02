@@ -65,6 +65,8 @@ export interface CompleteAuthSourceAttemptOptions {
 
 export interface AuthSourceStateMachine {
   begin(options: BeginAuthSourceAttemptOptions): AuthSourceAttempt;
+  /** Verifies that `complete` can run without publishing a new stable state. */
+  assertCanComplete(attempt: AuthSourceAttempt): void;
   complete(
     attempt: AuthSourceAttempt,
     options?: CompleteAuthSourceAttemptOptions,

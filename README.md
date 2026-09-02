@@ -49,13 +49,15 @@ Library public access
 
 Each authentication source and provider receives an independent lifecycle and cookie boundary. A failure or expiration in SmartID, Library authentication, or one provider must not damage unrelated sessions.
 
+Provider callbacks use a validated, deterministic transaction boundary. Each requested provider receives only its own scopes and a newly staged provider-specific HTTP session. Callback results remain hidden until every result passes provider, authentication-source, scope, and schema validation. The provider sessions and their owning authentication source are then published without an asynchronous gap; failed or stale attempts close staged transports and preserve previously committed sessions.
+
 ## Current Status
 
-SaintBridge is in pre-`v0.1` development. **AUTH-01 and AUTH-02 are complete:** the project has a common dual-input executor, one-shot credential lifecycle, source-specific navigation policies, an isolated visible Playwright runner, and an independent SmartID/Library state machine with deterministic rollback and stale-attempt protection. The mock orchestrator uses the same production state contract and supports controllable authentication tests. The next task is **AUTH-03, provider callback and session binding**.
+SaintBridge is in pre-`v0.1` development. **AUTH-01 through AUTH-03 are complete:** the project has a common dual-input executor, one-shot credential lifecycle, source-specific navigation policies, an isolated visible Playwright runner, an independent SmartID/Library state machine, and transactional provider callback/session binding with provider-isolated HTTP sessions. The mock orchestrator uses the production state, callback, transaction, and transport contracts for deterministic routing, rollback, stale-race, and isolation tests. The next task is **AUTH-04, authentication failure classification**.
 
 The project cannot yet be used to sign in to school services or retrieve academic information.
 
-See [Authentication](docs/authentication.md) for the implemented execution and state boundaries and the remaining live-login work.
+See [Authentication](docs/authentication.md) for the implemented execution, state, and callback boundaries and the remaining live-protocol work.
 
 ## Design Principles
 
